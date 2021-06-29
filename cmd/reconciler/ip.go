@@ -5,7 +5,7 @@ import (
 	"os"
 
 	"github.com/dougbtv/whereabouts/pkg/logging"
-	"github.com/dougbtv/whereabouts/pkg/storage"
+	"github.com/dougbtv/whereabouts/pkg/reconciler"
 )
 
 func main() {
@@ -16,12 +16,15 @@ func main() {
 		_ = logging.Errorf("must specify the kubernetes config file, via the '-kubeconfig' flag")
 		os.Exit(kubeconfigNotFound)
 	}
-	logging.Debugf("Kubernetes config file located at: %s", *kubeConfigFile)
 
-	_, err := storage.NewKubernetesClient(*kubeConfigFile)
+	ipReconcileLoop, err := reconciler.NewReconcileLooper(*kubeConfigFile)
 	if err != nil {
-		_ = logging.Errorf("failed to instantiate the Kubernetes client: %+v", err)
-		os.Exit(couldNotConnectToKubernetes)
+		os.Exit(couldNotStartOrphanedIPMonitor)
 	}
-	logging.Debugf("created kubernetes client via kubeconfig located at: %s", *kubeConfigFile)
+
+	cleanedUpIps, err := ipReconcileLoop.ReconcileIPPools()
+	if err != nil {
+		_ = logging.Errorf("failed to clean up IP for allocations: %v", err)
+	}
+	logging.Debugf("successfully cleanup IPs: %+v", cleanedUpIps)
 }
