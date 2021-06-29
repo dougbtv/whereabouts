@@ -27,3 +27,7 @@ type Store interface {
 	Status(ctx context.Context) error
 	Close() error
 }
+
+type Temporary interface {
+	Temporary() bool
+}
