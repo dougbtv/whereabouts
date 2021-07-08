@@ -434,8 +434,6 @@ func IPManagementKubernetes(mode int, ipamConf whereaboutstypes.IPAMConfig, cont
 func IPManagementKubernetesUpdate(mode int, ipam *KubernetesIPAM, ipamConf whereaboutstypes.IPAMConfig, containerID string, podRef string) (net.IPNet, error) {
 	logging.Debugf("IPManagement -- mode: %v / containerID: %v / podRef: %v", mode, containerID, podRef)
 
-	now := time.Now()
-
 	var newip net.IPNet
 	// Skip invalid modes
 	switch mode {
@@ -549,7 +547,5 @@ RETRYLOOP:
 		}
 	}
 
-	//XXX
-	logging.Debugf("Took: %vms\n", time.Since(now).Milliseconds())
 	return newip, err
 }
