@@ -37,7 +37,7 @@ func AssignIP(ipamConf types.IPAMConfig, reservelist []types.IPReservation, cont
 // DeallocateIP assigns an IP using a range and a reserve list.
 func DeallocateIP(iprange string, reservelist []types.IPReservation, containerID string) ([]types.IPReservation, error) {
 
-	updatedreservelist, err := IterateForDeallocation(reservelist, containerID)
+	updatedreservelist, err := IterateForDeallocation(reservelist, containerID, getMatchingIPReservationIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -46,16 +46,11 @@ func DeallocateIP(iprange string, reservelist []types.IPReservation, containerID
 }
 
 // IterateForDeallocation iterates overs currently reserved IPs and the deallocates given the container id.
-func IterateForDeallocation(reservelist []types.IPReservation, containerID string) ([]types.IPReservation, error) {
-
-	// Cycle through and find the index that corresponds to our containerID
-	foundidx := -1
-	for idx, v := range reservelist {
-		if v.ContainerID == containerID {
-			foundidx = idx
-			break
-		}
-	}
+func IterateForDeallocation(
+	reservelist []types.IPReservation,
+	containerID string,
+	matchingFunction func(reservation []types.IPReservation, id string) int) ([]types.IPReservation, error) {
+	foundidx := matchingFunction(reservelist, containerID)
 
 	// Check if it's a valid index
 	if foundidx < 0 {
@@ -64,6 +59,17 @@ func IterateForDeallocation(reservelist []types.IPReservation, containerID strin
 
 	updatedreservelist := removeIdxFromSlice(reservelist, foundidx)
 	return updatedreservelist, nil
+}
+
+func getMatchingIPReservationIndex(reservelist []types.IPReservation, id string) int {
+	foundidx := -1
+	for idx, v := range reservelist {
+		if v.ContainerID == id {
+			foundidx = idx
+			break
+		}
+	}
+	return foundidx
 }
 
 func removeIdxFromSlice(s []types.IPReservation, i int) []types.IPReservation {
