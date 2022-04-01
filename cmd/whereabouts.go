@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 
 	"github.com/containernetworking/cni/pkg/skel"
@@ -96,6 +97,9 @@ func cmdDel(args *skel.CmdArgs) error {
 	}
 	logging.Debugf("DEL - IPAM configuration successfully read: %+v", filterConf(*ipamConf))
 	logging.Debugf("Beginning delete for ContainerID: %v", args.ContainerID)
+
+	logging.Errorf("WARNING: (BIG BIG WARNING) EXITING ZERO ON PURPOSE FOR TEST PURPOSES")
+	os.Exit(0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), types.DelTimeLimit)
 	defer cancel()
