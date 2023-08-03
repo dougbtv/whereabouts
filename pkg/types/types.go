@@ -63,6 +63,7 @@ type IPAMConfig struct {
 	LogFile                  string               `json:"log_file"`
 	LogLevel                 string               `json:"log_level"`
 	ReconcilerCronExpression string               `json:"reconciler_cron_expression,omitempty"`
+	ReconcilerCronFile       string               `json:"reconciler_cron_file,omitempty"`
 	OverlappingRanges        bool                 `json:"enable_overlapping_ranges,omitempty"`
 	SleepForRace             int                  `json:"sleep_for_race,omitempty"`
 	Gateway                  net.IP
@@ -70,7 +71,7 @@ type IPAMConfig struct {
 	ConfigurationPath        string           `json:"configuration_path"`
 	PodName                  string
 	PodNamespace             string
-	NetworkName              string           `json:"network_name,omitempty"`
+	NetworkName              string `json:"network_name,omitempty"`
 }
 
 func (ic *IPAMConfig) UnmarshalJSON(data []byte) error {
@@ -99,6 +100,7 @@ func (ic *IPAMConfig) UnmarshalJSON(data []byte) error {
 		LogFile                  string               `json:"log_file"`
 		LogLevel                 string               `json:"log_level"`
 		ReconcilerCronExpression string               `json:"reconciler_cron_expression,omitempty"`
+		ReconcilerCronFile       string               `json:"reconciler_cron_file,omitempty"`
 		OverlappingRanges        bool                 `json:"enable_overlapping_ranges,omitempty"`
 		SleepForRace             int                  `json:"sleep_for_race,omitempty"`
 		Gateway                  string
@@ -106,7 +108,7 @@ func (ic *IPAMConfig) UnmarshalJSON(data []byte) error {
 		ConfigurationPath        string           `json:"configuration_path"`
 		PodName                  string
 		PodNamespace             string
-		NetworkName              string           `json:"network_name,omitempty"`
+		NetworkName              string `json:"network_name,omitempty"`
 	}
 
 	ipamConfigAlias := IPAMConfigAlias{
@@ -136,6 +138,7 @@ func (ic *IPAMConfig) UnmarshalJSON(data []byte) error {
 		LogLevel:                 ipamConfigAlias.LogLevel,
 		OverlappingRanges:        ipamConfigAlias.OverlappingRanges,
 		ReconcilerCronExpression: ipamConfigAlias.ReconcilerCronExpression,
+		ReconcilerCronFile:       ipamConfigAlias.ReconcilerCronFile,
 		SleepForRace:             ipamConfigAlias.SleepForRace,
 		Gateway:                  backwardsCompatibleIPAddress(ipamConfigAlias.Gateway),
 		Kubernetes:               ipamConfigAlias.Kubernetes,

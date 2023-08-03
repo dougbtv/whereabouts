@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	gocron "github.com/go-co-op/gocron"
@@ -66,7 +67,7 @@ func main() {
 	defer networkController.Shutdown()
 
 	s := gocron.NewScheduler(time.UTC)
-	schedule := cronExpressionFromFlatFile()
+	schedule := determineCronExpression()
 
 	_, err = s.Cron(schedule).Do(func() { // user configurable cron expression in install-cni.sh
 		reconciler.ReconcileIPs(errorChan)
@@ -164,11 +165,25 @@ func newEventRecorder(broadcaster record.EventBroadcaster) record.EventRecorder 
 	return broadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: controllerName})
 }
 
-func cronExpressionFromFlatFile() string {
+func determineCronExpression() string {
+	// !bang
 	flatipam, _, err := config.GetFlatIPAM(true, &types.IPAMConfig{}, "")
 	if err != nil {
-		_ = logging.Errorf("could not get flatipam: %v", err)
+		_ = logging.Errorf("could not get flatipam config: %v", err)
 		os.Exit(couldNotGetFlatIPAM)
 	}
-	return flatipam.IPAM.ReconcilerCronExpression
+
+	if flatipam.IPAM.ReconcilerCronFile != "" {
+		// We read the expression from a file if present, otherwise we use ReconcilerCronExpression
+		fileContents, err := os.ReadFile(flatipam.IPAM.ReconcilerCronFile)
+		if err != nil {
+			_ = logging.Errorf("could not read file: %v, using expression: %v", err, flatipam.IPAM.ReconcilerCronExpression)
+			return flatipam.IPAM.ReconcilerCronExpression
+		}
+		logging.Verbosef("using expression: %v", strings.TrimSpace(string(fileContents)))
+		return strings.TrimSpace(string(fileContents))
+	} else {
+		logging.Verbosef("using expression: %v", flatipam.IPAM.ReconcilerCronExpression)
+		return flatipam.IPAM.ReconcilerCronExpression
+	}
 }
