@@ -197,9 +197,9 @@ func parsePodNetworkObjectName(podnetwork string) (string, string, string, error
 	return netNsName, networkName, netIfName, nil
 }
 
-// GetNetworkDelegates returns delegatenetconf from net-attach-def annotation in pod
-func GetNetworkDelegates(pod *v1.Pod, networks []*types.NetworkSelectionElement) ([]*types.DelegateNetConf, error) {
-	// logging.Debugf("GetNetworkDelegates: %v, %v", pod, networks)
+// ProcessNetworkSelection returns delegatenetconf from net-attach-def annotation in pod
+func ProcessNetworkSelection(pod *v1.Pod, networks []*types.NetworkSelectionElement) (map[string]string, error) {
+	// logging.Debugf("ProcessNetworkSelection: %v, %v", pod, networks)
 	cconfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to implicitly generate the kubeconfig: %w", err)
@@ -210,16 +210,14 @@ func GetNetworkDelegates(pod *v1.Pod, networks []*types.NetworkSelectionElement)
 		return nil, err
 	}
 
-	// Read all network objects referenced by 'networks'
-	var delegates []*types.DelegateNetConf
-
-	for _, net := range networks {
-		logging.Verbosef("!bang each GetNetworkDelegates: %v / %v", net.Namespace, net.Name)
+	labellist := make(map[string]string)
+	for idx, net := range networks {
+		logging.Verbosef("!bang each ProcessNetworkSelection: %v / %v", net.Namespace, net.Name)
 		netattach, err := nc.K8sCniCncfIoV1().NetworkAttachmentDefinitions(net.Namespace).Get(context.TODO(), net.Name, metav1.GetOptions{})
 		if err != nil {
 			return nil, err
 		}
-		logging.Verbosef("!bang GetNetworkDelegates NET-ATTACH-DEF: %v", netattach)
+		logging.Verbosef("!bang ProcessNetworkSelection NET-ATTACH-DEF: %v", netattach)
 
 		// NEXT!
 		// We  need to parse the delegate to see if it's from Whereabouts
@@ -246,13 +244,30 @@ func GetNetworkDelegates(pod *v1.Pod, networks []*types.NetworkSelectionElement)
 
 			logging.Verbosef("!bang NEWIPS: %v", newips)
 
+			// When we go to set the label... we need to be award of our ordinality.
+			// We need to label on ordinality and hope it matches up on the CNI exec side.
+			// There's no promise of this, but it's the best we can do.
+			// We need to get the ordinality from the pod, and then set the label on the pod.
+			// Convert net.IPNet to a comma-separated string representation
+			var ipsAsString []string
+			for _, ipNet := range newips {
+				// Replace the '/' character with '|'
+				cidrString := strings.ReplaceAll(ipNet.String(), "/", "-")
+				cidrString = strings.ReplaceAll(cidrString, ":", "_")
+				ipsAsString = append(ipsAsString, cidrString)
+			}
+			ipsList := strings.Join(ipsAsString, ",")
+
+			// Insert entry to the hashList map
+			labellist[fmt.Sprintf("whereabouts-%d", idx)] = ipsList
+
 		} else {
 			return nil, &NoK8sNetworkError{"no kubernetes network found"}
 		}
 
 	}
 
-	return delegates, nil
+	return labellist, nil
 }
 
 func generateUUIDPath(prefix string) string {
@@ -393,7 +408,7 @@ func getKubernetesDelegate(client *ClientInfo, net *types.NetworkSelectionElemen
 
 	networks, err := GetPodNetwork(pod)
 	if networks != nil {
-		delegates, err := GetNetworkDelegates(clientInfo, pod, networks, conf, resourceMap)
+		delegates, err := ProcessNetworkSelection(clientInfo, pod, networks, conf, resourceMap)
 
 		if err != nil {
 			if _, ok := err.(*NoK8sNetworkError); ok {
@@ -445,10 +460,11 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// !bang
+	var labellist map[string]string
 	whereaboutsfound := true
 	networks, err := GetPodNetwork(&pod)
 	if networks != nil {
-		_, err = GetNetworkDelegates(&pod, networks)
+		labellist, err = ProcessNetworkSelection(&pod, networks)
 		if err != nil {
 			if _, ok := err.(*NoK8sNetworkError); ok {
 				whereaboutsfound = false
@@ -456,6 +472,7 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 				// return
 			}
 		}
+		logging.Verbosef("!bang labellist: %v", labellist)
 	} else {
 		whereaboutsfound = false
 	}
@@ -467,16 +484,30 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 	admissionResponse.Allowed = true
 
 	if whereaboutsfound {
-		var patch string
+
+		var patch []map[string]interface{}
 		patchType := admissionv1.PatchTypeJSONPatch
-		if _, ok := pod.Labels["hello"]; !ok {
-			patch = `[{"op":"add","path":"/metadata/labels","value":{"hello":"world"}}]`
+		for key, value := range labellist {
+			patch = append(patch, map[string]interface{}{
+				"op":   "add",
+				"path": "/metadata/labels",
+				"value": map[string]string{
+					key: value,
+				},
+			})
 		}
 
-		if patch != "" {
-			admissionResponse.PatchType = &patchType
-			admissionResponse.Patch = []byte(patch)
+		logging.Verbosef("!bang patch: %v", patch)
+
+		// Convert the patch to JSON
+		patchBytes, err := json.Marshal(patch)
+		if err != nil {
+			// Handle error
 		}
+
+		// Set the patch and patch type in the admission response
+		admissionResponse.PatchType = &patchType
+		admissionResponse.Patch = patchBytes
 
 	}
 
