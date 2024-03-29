@@ -86,23 +86,23 @@ data:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: whereabouts
+  name: whereabouts-cni
   namespace: kube-system
   labels:
     tier: node
-    app: whereabouts
+    app: whereabouts-cni
 spec:
   selector:
     matchLabels:
-      name: whereabouts
+      name: whereabouts-cni
   updateStrategy:
     type: RollingUpdate
   template:
     metadata:
       labels:
         tier: node
-        app: whereabouts
-        name: whereabouts
+        app: whereabouts-cni
+        name: whereabouts-cni
     spec:
       hostNetwork: true
       serviceAccountName: whereabouts
@@ -110,13 +110,11 @@ spec:
       - operator: Exists
         effect: NoSchedule
       containers:
-      - name: whereabouts
+      - name: whereabouts-cni
         command: [ "/bin/sh" ]
         args:
           - -c
-          - >
-            SLEEP=false /install-cni.sh &&
-            /ip-control-loop -log-level debug
+          - SLEEP=true /install-cni.sh
         image: ghcr.io/k8snetworkplumbingwg/whereabouts:latest
         env:
         - name: NODENAME
@@ -158,3 +156,140 @@ spec:
             items:
             - key: "cron-expression"
               path: "config"
+
+# ---
+# apiVersion: apps/v1
+# kind: ReplicaSet
+# metadata:
+#   name: whereabouts-ip-controller
+#   namespace: kube-system
+# spec:
+#   replicas: 1
+#   selector:
+#     matchLabels:
+#       name: whereabouts-ip-controller
+#   template:
+#     metadata:
+#       labels:
+#         name: whereabouts-ip-controller
+#     spec:
+#       containers:
+#       - name: whereabouts-ip-controller
+#         command: [ "/ip-control-loop" ]
+#         args:
+#           - -log-level
+#           - debug
+#         image: ghcr.io/k8snetworkplumbingwg/whereabouts:latest
+#         env:
+#         - name: NODENAME
+#           valueFrom:
+#             fieldRef:
+#               apiVersion: v1
+#               fieldPath: spec.nodeName
+#         - name: WHEREABOUTS_NAMESPACE
+#           valueFrom:
+#             fieldRef:
+#               fieldPath: metadata.namespace
+#         resources:
+#           requests:
+#             cpu: "100m"
+#             memory: "100Mi"
+#           limits:
+#             cpu: "100m"
+#             memory: "200Mi"
+#         securityContext:
+#           privileged: true
+
+# 1. Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: whereabouts-webhook
+  namespace: kube-system
+spec:
+  selector:
+    app: whereabouts-webhook
+  ports:
+    - protocol: TCP
+      port: 443
+      targetPort: 443
+
+# 2. Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whereabouts-webhook
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: whereabouts-webhook
+  template:
+    metadata:
+      labels:
+        app: whereabouts-webhook
+    spec:
+      containers:
+      - name: whereabouts-ip-controller
+        command: [ "/ip-control-loop" ]
+        args:
+          - -log-level
+          - debug
+        image: ghcr.io/k8snetworkplumbingwg/whereabouts:latest
+        ports:
+        - containerPort: 443
+        env:
+        - name: TLS_CERT_PATH
+          value: "/etc/webhook/certs/tls.crt"
+        - name: TLS_KEY_PATH
+          value: "/etc/webhook/certs/tls.key"
+        - name: NODENAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.nodeName
+        - name: WHEREABOUTS_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: tls-certs
+          mountPath: /etc/webhook/certs
+          readOnly: true
+
+# 3. Secret for TLS
+apiVersion: v1
+kind: Secret
+metadata:
+  name: whereabouts-webhook-certs
+  namespace: kube-system
+data:
+  tls.crt: >
+    LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURHVENDQWdFQ0ZGMXd0U1NSTUdadTNVSFFwMnZHOEZPdWdxVGtNQTBHQ1NxR1NJYjNEUUVCQ3dVQU1Fa3gKQ3pBSkJnTlZCQVlUQWxWVE1SQXdEZ1lEVlFRSURBZFdaWEp0YjI1ME1ROHdEUVlEVlFRSERBWkNiMngwYjI0eApGekFWQmdOVkJBb01EbGRvWlhKbFlXSnZkWFJ6TG1sdk1CNFhEVEkwTURNeU9ERTFNRE13TTFvWERUSTFNRE15Ck9ERTFNRE13TTFvd1NURUxNQWtHQTFVRUJoTUNWVk14RURBT0JnTlZCQWdNQjFabGNtMXZiblF4RHpBTkJnTlYKQkFjTUJrSnZiSFJ2YmpFWE1CVUdBMVVFQ2d3T1YyaGxjbVZoWW05MWRITXVhVzh3Z2dFaU1BMEdDU3FHU0liMwpEUUVCQVFVQUE0SUJEd0F3Z2dFS0FvSUJBUURBTExmempHZ2xwUHlLVDlab0t4RVJTdU5iNUI3MTk1QXhNbEFNClZUS3FmQjJPWXNWVFM1VGE0amtaYkFmcm9FYUdEZHF6Um5wSnU1N1ptUDVFOWEwR1ArdUdjRWZaUmdFak9HbEUKSmkzZmNKS3poRHIyL0R2czdvdUJVYmdGOEk5aC9VTmdsWlRtN1hXSDg4aGJVeVoyS08xVVpBbThoRG1BOFUxZQo3Rk0wTFBaRmhrSWNqTG80dkVRRkF6dFl4TFRKTkp1TWV5cmRveGh2VVZxc0dnVGZtaVdlQUhLbEt2cHBuTUc5CmVPTmtnZk1pMXBCWHp4SXluaU5va3FMN29ZY3NNN2JFRDFoVll5S0MwTjFVOWJkekl0dlNUbXkxa1o4RnZ0NEMKMVBtcU9EZnFxbVN6ckpqenZMZDhZSG4xM3FpQkNSUnB0Q0VwTW0xOXZXWXRtc2FmQWdNQkFBRXdEUVlKS29aSQpodmNOQVFFTEJRQURnZ0VCQUM1N1J1cm5TZ2EyWDNSd0tjcUNhZlN5akhzUTJBYUpXWU5VaEMzRWhBdXdnbVhnCjFvT01XMSt0RUYvcjMyTHBGU0hoYWwwb09wRDRDQ3NFZXNwYXJNa2NHbmxQeERjcjhQRitLMUg1QUtzeUY4UlYKR0Q5V1pQQm5QT283dkpTemVsU1pJTXdXbHNhQmF3UG1pbTNNNmgvbm5yeTZ5VzBIYXh2cmx0Q3JOd3ZvN2FJMgo3WHNrdmxuQzUyN0VNdkYvMStCZExKK0dZSGNMaEtCK1pyczFwUkVKZmF0a29oWE0vcmJHTHdlVVpOcXM2ZmZNClREcXh1MzJSeHpKRjhsNS9aelJlK2M5V3piZFFUeG50bmlvZ2swenNLUDlJMXlvMkY4U1VPMWc0cndKTkROS2MKZi92RENneDFSVm93QTFpZm94Qm9XcnJNVG9CYUt6a0tQK2dVckswPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+  tls.key: >
+    LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBd0N5Mzg0eG9KYVQ4aWsvV2FDc1JFVXJqVytRZTlmZVFNVEpRREZVeXFud2RqbUxGClUwdVUydUk1R1d3SDY2QkdoZzNhczBaNlNidWUyWmorUlBXdEJqL3JobkJIMlVZQkl6aHBSQ1l0MzNDU3M0UTYKOXZ3NzdPNkxnVkc0QmZDUFlmMURZSldVNXUxMWgvUElXMU1tZGlqdFZHUUp2SVE1Z1BGTlh1eFROQ3oyUllaQwpISXk2T0x4RUJRTTdXTVMweVRTYmpIc3EzYU1ZYjFGYXJCb0UzNW9sbmdCeXBTcjZhWnpCdlhqalpJSHpJdGFRClY4OFNNcDRqYUpLaSs2R0hMRE8yeEE5WVZXTWlndERkVlBXM2N5TGIwazVzdFpHZkJiN2VBdFQ1cWpnMzZxcGsKczZ5WTg3eTNmR0I1OWQ2b2dRa1VhYlFoS1RKdGZiMW1MWnJHbndJREFRQUJBb0lCQUcrK2tRaFJjSTNUTGZYUApEc0ZycVhVQXNzdlFEaURBWDF2OEFZZnFVcGZIcS9nTGZ1bzhYTVlhSFZHbSs4UUxZbmE0djU3WE1HeUhhSXJtCjU1TjV0NjZXcElGNzhJdHFwV2F4ZXFSaC92S2FKdk96eEFXeURiWnJ6enJYSmNadVp6RjNieUpPV0ZNZmFPUXcKNFNRWmFaZnpuRzBoN25kciszUDYzQjZDRksrVkllbUE4L0hNOHhsMzlteXVRR2NXdWI2a3lFYURoTjhFV1AwYgpPZ2RXWGpkeEdnTE5lcGJZeDVmSU9paCtZMGcvaVdhV3lKNENEeU4zZnNJRW9iSU5aMDhMZVpTSkpNbWpYekhKCk1UVGFJRktYeUE0MGpIUVZ6MmFWN3NKOW8wRkhwOTdnVFVtRFNkYnpYN29sdUtBNXlZOXM5aG55OXVEMytLdDEKQVVwWmNvRUNnWUVBOTZ2ZWtWNWxIUTBDUThCMGd2YXJGWVpLY1QrS2x1Z1NyUlk0OXVsd3Q4eld0Rk1adXpRZApjaXM0aUQvY0ZXakJZb3lyY2tHWVZ5aXFuZ2NPcVZ3L0tzV041TDhJUFVpeHdHd3Q5WFNXYVFpMElOS1NldG1hCnBydkhnZG9QeG95V2E3R1pZcHRGSlQ1SzJaZ3VPRzBIa1h2M0VYTzhIZE9BUDFjU1Q4emQvTzhDZ1lFQXhxTVkKS2FUUE04c2EwV2FFbFNWMVJnTjdiK2F5YmZKVTJLWkViK09NZkNPZHU1ZHU2cE11NnAxYTFXUXdXdExQQ1lUSQpHbTFQeEVXeDFWYStqa2dqNEhFcGwzRFh3QVRSa2F0UG5Nai92c0l4U1JzNEdRaHJ5QlJuUk1kVldkRTMzVktlCm5nUDZjTkdMTUNrQTBsUktpdWdCZ0tUUHJKR1paT3NBNGFsTU1WRUNnWUI1TGt6T0Q4T2xmVEg0ZUhnSmhDdWQKY29HRis3TVJ0eWM4TFQxZUFrWTJpREVkTmZQSEZ1NjVaOUJYU2Zlak9nZzA4ZU1KR25NeFlpSnBBOGIyc3IzdApiWS9KdG5hUGxidnpESHRJTisxSUl3d1BhemhraDRnVndKY1RQK0NzSXltT00rMTZ3OElIUVAxYWpnMC9hb2xqCmM2WWxrZDBmTXRiekp1VTh5bDVyWFFLQmdRQ1FwMGo3V3FnQ0FkQy8yYmFIbnNXdWZPNnhhUUZiaS9RNTZhdEIKQ0NiUWFHZC9xeUg4OWI1ZTRNUzdUY0RoQTAvK2tKSGduT1pQK3Frc3dZVDN2SlZUNTFUd2toNnNHVlk4ak5MbgpUSURoL0MxRUhleFdYb21QSlR5bkc3cU9OQXhJd3RmOEhzMk14eXhqb0JpWEV3ZE43UExiS2lxS2MyV1Axb3ZICnlqQlFZUUtCZ1FDNVNveTE0QXVxeWRXdHlrTlhEZTI2ZzR3VjEzb2toMkl0QlBMYURjT00vdDMrcHcvSDVPZ2sKTzdwcEVOUmIwSUxlUWJ5VEdIc2JwdzlNNHZ5aWNVR2E0SGxQdlVTcFU4K0NoRHhCRHVWK1FwZnNWZy96dGgvRAo2VVo5VERKaHBwWWRSeUw1RlZSZW9YM3V6cGM3MEplaVJzSVRoSE1WcjRYRWNtTzZYZGM5NHc9PQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo=
+type: kubernetes.io/tls
+
+# 4. MutatingWebhookConfiguration
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: whereabouts-webhook
+webhooks:
+  - name: pod.whereabouts.example.com
+    clientConfig:
+      service:
+        name: whereabouts-webhook
+        namespace: kube-system
+        path: "/mutate"
+      caBundle: >
+        LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURHVENDQWdFQ0ZGMXd0U1NSTUdadTNVSFFwMnZHOEZPdWdxVGtNQTBHQ1NxR1NJYjNEUUVCQ3dVQU1Fa3gKQ3pBSkJnTlZCQVlUQWxWVE1SQXdEZ1lEVlFRSURBZFdaWEp0YjI1ME1ROHdEUVlEVlFRSERBWkNiMngwYjI0eApGekFWQmdOVkJBb01EbGRvWlhKbFlXSnZkWFJ6TG1sdk1CNFhEVEkwTURNeU9ERTFNRE13TTFvWERUSTFNRE15Ck9ERTFNRE13TTFvd1NURUxNQWtHQTFVRUJoTUNWVk14RURBT0JnTlZCQWdNQjFabGNtMXZiblF4RHpBTkJnTlYKQkFjTUJrSnZiSFJ2YmpFWE1CVUdBMVVFQ2d3T1YyaGxjbVZoWW05MWRITXVhVzh3Z2dFaU1BMEdDU3FHU0liMwpEUUVCQVFVQUE0SUJEd0F3Z2dFS0FvSUJBUURBTExmempHZ2xwUHlLVDlab0t4RVJTdU5iNUI3MTk1QXhNbEFNClZUS3FmQjJPWXNWVFM1VGE0amtaYkFmcm9FYUdEZHF6Um5wSnU1N1ptUDVFOWEwR1ArdUdjRWZaUmdFak9HbEUKSmkzZmNKS3poRHIyL0R2czdvdUJVYmdGOEk5aC9VTmdsWlRtN1hXSDg4aGJVeVoyS08xVVpBbThoRG1BOFUxZQo3Rk0wTFBaRmhrSWNqTG80dkVRRkF6dFl4TFRKTkp1TWV5cmRveGh2VVZxc0dnVGZtaVdlQUhLbEt2cHBuTUc5CmVPTmtnZk1pMXBCWHp4SXluaU5va3FMN29ZY3NNN2JFRDFoVll5S0MwTjFVOWJkekl0dlNUbXkxa1o4RnZ0NEMKMVBtcU9EZnFxbVN6ckpqenZMZDhZSG4xM3FpQkNSUnB0Q0VwTW0xOXZXWXRtc2FmQWdNQkFBRXdEUVlKS29aSQpodmNOQVFFTEJRQURnZ0VCQUM1N1J1cm5TZ2EyWDNSd0tjcUNhZlN5akhzUTJBYUpXWU5VaEMzRWhBdXdnbVhnCjFvT01XMSt0RUYvcjMyTHBGU0hoYWwwb09wRDRDQ3NFZXNwYXJNa2NHbmxQeERjcjhQRitLMUg1QUtzeUY4UlYKR0Q5V1pQQm5QT283dkpTemVsU1pJTXdXbHNhQmF3UG1pbTNNNmgvbm5yeTZ5VzBIYXh2cmx0Q3JOd3ZvN2FJMgo3WHNrdmxuQzUyN0VNdkYvMStCZExKK0dZSGNMaEtCK1pyczFwUkVKZmF0a29oWE0vcmJHTHdlVVpOcXM2ZmZNClREcXh1MzJSeHpKRjhsNS9aelJlK2M5V3piZFFUeG50bmlvZ2swenNLUDlJMXlvMkY4U1VPMWc0cndKTkROS2MKZi92RENneDFSVm93QTFpZm94Qm9XcnJNVG9CYUt6a0tQK2dVckswPQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg==
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+    admissionReviewVersions: ["v1", "v1beta1"]
+    sideEffects: None
+    timeoutSeconds: 5
