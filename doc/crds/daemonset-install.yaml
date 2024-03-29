@@ -256,6 +256,12 @@ spec:
             fieldRef:
               fieldPath: metadata.namespace
         volumeMounts:
+        - name: cron-scheduler-configmap
+          mountPath: /cron-schedule
+        - name: cnibin
+          mountPath: /opt/cni/bin
+        - name: cni-net-dir
+          mountPath: /etc/cni/net.d
         - name: tls-certs
           mountPath: /etc/webhook/certs
           readOnly: true
@@ -271,7 +277,19 @@ spec:
       - name: ip-control-loop
         hostPath:
           path: /tmp/ip-control-loop  # Mount /tmp/ip-control-loop from the host
-
+      - name: cnibin
+        hostPath:
+          path: /opt/cni/bin
+      - name: cni-net-dir
+        hostPath:
+          path: /etc/cni/net.d
+      - name: cron-scheduler-configmap
+        configMap:
+          name: "whereabouts-config"
+          defaultMode: 0744
+          items:
+          - key: "cron-expression"
+            path: "config"
 ---
 # 3. Secret for TLS
 apiVersion: v1

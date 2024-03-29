@@ -2,6 +2,7 @@ package webhook
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -14,7 +15,9 @@ import (
 	"strings"
 
 	netclient "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/clientset/versioned"
+	"github.com/k8snetworkplumbingwg/whereabouts/pkg/config"
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/logging"
+	"github.com/k8snetworkplumbingwg/whereabouts/pkg/storage/kubernetes"
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/types"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -68,7 +71,7 @@ func (e *NoK8sNetworkError) Error() string { return e.message }
 
 // GetPodNetwork gets net-attach-def annotation from pod
 func GetPodNetwork(pod *v1.Pod) ([]*types.NetworkSelectionElement, error) {
-	// logging.Debugf("GetPodNetwork: %v", pod)
+	// logging.Debugf("!bang GetPodNetwork POD DETAILS: %v", pod)
 
 	netAnnot := pod.Annotations[networkAttachmentAnnot]
 	defaultNamespace := pod.ObjectMeta.Namespace
@@ -197,12 +200,12 @@ func parsePodNetworkObjectName(podnetwork string) (string, string, string, error
 // GetNetworkDelegates returns delegatenetconf from net-attach-def annotation in pod
 func GetNetworkDelegates(pod *v1.Pod, networks []*types.NetworkSelectionElement) ([]*types.DelegateNetConf, error) {
 	// logging.Debugf("GetNetworkDelegates: %v, %v", pod, networks)
-	config, err := rest.InClusterConfig()
+	cconfig, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to implicitly generate the kubeconfig: %w", err)
 	}
 
-	nc, err := netclient.NewForConfig(config)
+	nc, err := netclient.NewForConfig(cconfig)
 	if err != nil {
 		return nil, err
 	}
@@ -211,16 +214,142 @@ func GetNetworkDelegates(pod *v1.Pod, networks []*types.NetworkSelectionElement)
 	var delegates []*types.DelegateNetConf
 
 	for _, net := range networks {
-		logging.Verbosef("!bang GetNetworkDelegates: %v / %v", net.Namespace, net.Name)
+		logging.Verbosef("!bang each GetNetworkDelegates: %v / %v", net.Namespace, net.Name)
 		netattach, err := nc.K8sCniCncfIoV1().NetworkAttachmentDefinitions(net.Namespace).Get(context.TODO(), net.Name, metav1.GetOptions{})
 		if err != nil {
 			return nil, err
 		}
-		logging.Verbosef("!bang GetNetworkDelegates: %v", netattach)
+		logging.Verbosef("!bang GetNetworkDelegates NET-ATTACH-DEF: %v", netattach)
+
+		// NEXT!
+		// We  need to parse the delegate to see if it's from Whereabouts
+		if strings.Contains(netattach.Spec.Config, "whereabouts") {
+			// Then we need to get the IPAM config from within it. Or do we? I don't think we do.
+			// Then we need to emulate a CNI ADD...
+			ipamConf, _, err := config.LoadIPAMConfig([]byte(netattach.Spec.Config), cniArgs(pod.Namespace, pod.Name))
+			if err != nil {
+				logging.Errorf("IPAM configuration load failed: %s", err)
+				return nil, err
+			}
+
+			uuidPath := generateUUIDPath("whereabouts/tmp")
+			logging.Verbosef("!bang UUID PATH: %v", uuidPath)
+
+			k8sipam, err := kubernetes.NewKubernetesIPAM(uuidPath, *ipamConf)
+			if err != nil {
+				return nil, logging.Errorf("failed to create Kubernetes IPAM manager: %v", err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), types.AddTimeLimit)
+			defer cancel()
+			newips, err := kubernetes.IPManagementKubernetesUpdate(ctx, types.Allocate, k8sipam, *ipamConf, uuidPath, ipamConf.GetPodRef())
+
+			logging.Verbosef("!bang NEWIPS: %v", newips)
+
+		} else {
+			return nil, &NoK8sNetworkError{"no kubernetes network found"}
+		}
+
 	}
 
 	return delegates, nil
 }
+
+func generateUUIDPath(prefix string) string {
+	// Generate random bytes
+	uuidBytes := make([]byte, 16)
+	_, err := rand.Read(uuidBytes)
+	if err != nil {
+		panic(err)
+	}
+
+	// Set the version (4) and variant (2) bits
+	uuidBytes[6] = (uuidBytes[6] & 0x0f) | 0x40 // Version 4 (random)
+	uuidBytes[8] = (uuidBytes[8] & 0x3f) | 0x80 // Variant 2 (RFC 4122)
+
+	// Format the UUID as a string
+	uuidStr := fmt.Sprintf("%x-%x-%x-%x-%x", uuidBytes[0:4], uuidBytes[4:6], uuidBytes[6:8], uuidBytes[8:10], uuidBytes[10:])
+
+	// Concatenate the prefix with the UUID string representation
+	uuidPath := fmt.Sprintf("%s/%s", prefix, uuidStr)
+
+	return uuidPath
+}
+
+func cniArgs(podNamespace string, podName string) string {
+	return fmt.Sprintf("IgnoreUnknown=1;K8S_POD_NAMESPACE=%s;K8S_POD_NAME=%s", podNamespace, podName)
+}
+
+/*
+
+
+		ipamConf, confVersion, err := config.LoadIPAMConfig(args.StdinData, args.Args)
+		if err != nil {
+			logging.Errorf("IPAM configuration load failed: %s", err)
+			return err
+		}
+		logging.Debugf("ADD - IPAM configuration successfully read: %+v", *ipamConf)
+		ipam, err := kubernetes.NewKubernetesIPAM(args.ContainerID, *ipamConf)
+		if err != nil {
+			return logging.Errorf("failed to create Kubernetes IPAM manager: %v", err)
+		}
+		defer func() { safeCloseKubernetesBackendConnection(ipam) }()
+		return cmdAdd(args, ipam, confVersion)
+
+---
+
+func cmdAdd(args *skel.CmdArgs, client *kubernetes.KubernetesIPAM, cniVersion string) error {
+	// Initialize our result, and assign DNS & routing.
+	result := &current.Result{}
+	result.DNS = client.Config.DNS
+	result.Routes = client.Config.Routes
+
+	logging.Debugf("Beginning IPAM for ContainerID: %v", args.ContainerID)
+	var newips []net.IPNet
+
+	ctx, cancel := context.WithTimeout(context.Background(), types.AddTimeLimit)
+	defer cancel()
+
+	newips, err := kubernetes.IPManagement(ctx, types.Allocate, client.Config, client)
+	if err != nil {
+		logging.Errorf("Error at storage engine: %s", err)
+		return fmt.Errorf("error at storage engine: %w", err)
+	}
+
+	for _, newip := range newips {
+		result.IPs = append(result.IPs, &current.IPConfig{
+			Address: newip,
+			Gateway: client.Config.Gateway})
+	}
+
+	// Assign all the static IP elements.
+	for _, v := range client.Config.Addresses {
+		result.IPs = append(result.IPs, &current.IPConfig{
+			Address: v.Address,
+			Gateway: v.Gateway})
+	}
+
+	return cnitypes.PrintResult(result, cniVersion)
+}
+
+---
+
+Protocol parameters are passed to the plugins via OS environment variables.
+
+CNI_COMMAND: indicates the desired operation; ADD, DEL, CHECK, GC, or VERSION.
+CNI_CONTAINERID: Container ID. A unique plaintext identifier for a container, allocated by the runtime. Must not be empty. Must start with an alphanumeric character, optionally followed by any combination of one or more alphanumeric characters, underscore (), dot (.) or hyphen (-).
+CNI_NETNS: A reference to the container's "isolation domain". If using network namespaces, then a path to the network namespace (e.g. /run/netns/[nsname])
+CNI_IFNAME: Name of the interface to create inside the container; if the plugin is unable to use this interface name it must return an error.
+CNI_ARGS: Extra arguments passed in by the user at invocation time. Alphanumeric key-value pairs separated by semicolons; for example, "FOO=BAR;ABC=123"
+CNI_PATH: List of paths to search for CNI plugin executables. Paths are separated by an OS-specific list separator; for example ':' on Linux and ';' on Windows
+
+---
+
+func LoadArgs
+func LoadArgs(args string, container interface{}) error
+LoadArgs parses args from a string in the form "K=V;K2=V2;..."
+
+*/
 
 /*
 func (c *ClientInfo) GetNetAttachDef(namespace, name string) (*nettypes.NetworkAttachmentDefinition, error) {
@@ -316,25 +445,39 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// !bang
+	whereaboutsfound := true
 	networks, err := GetPodNetwork(&pod)
 	if networks != nil {
 		_, err = GetNetworkDelegates(&pod, networks)
+		if err != nil {
+			if _, ok := err.(*NoK8sNetworkError); ok {
+				whereaboutsfound = false
+				logging.Verbosef("no kubernetes network found for pod: %v/%v", pod.Namespace, pod.Name)
+				// return
+			}
+		}
+	} else {
+		whereaboutsfound = false
 	}
 
 	// Create a response that will add a label to the pod if it does
 	// not already have a label with the key of "hello". In this case
 	// it does not matter what the value is, as long as the key exists.
 	admissionResponse := &admissionv1.AdmissionResponse{}
-	var patch string
-	patchType := admissionv1.PatchTypeJSONPatch
-	if _, ok := pod.Labels["hello"]; !ok {
-		patch = `[{"op":"add","path":"/metadata/labels","value":{"hello":"world"}}]`
-	}
-
 	admissionResponse.Allowed = true
-	if patch != "" {
-		admissionResponse.PatchType = &patchType
-		admissionResponse.Patch = []byte(patch)
+
+	if whereaboutsfound {
+		var patch string
+		patchType := admissionv1.PatchTypeJSONPatch
+		if _, ok := pod.Labels["hello"]; !ok {
+			patch = `[{"op":"add","path":"/metadata/labels","value":{"hello":"world"}}]`
+		}
+
+		if patch != "" {
+			admissionResponse.PatchType = &patchType
+			admissionResponse.Patch = []byte(patch)
+		}
+
 	}
 
 	// Construct the response, which is just another AdmissionReview.
