@@ -24,6 +24,7 @@ import (
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/controlloop"
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/logging"
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/reconciler"
+	"github.com/k8snetworkplumbingwg/whereabouts/pkg/webhook"
 )
 
 const (
@@ -50,6 +51,19 @@ func main() {
 		logging.SetLogLevel(*logLevel)
 	}
 	logging.SetLogStderr(true)
+
+	certPath := "/etc/webhook/certs/tls.crt"
+	keyPath := "/etc/webhook/certs/tls.key"
+	webhook.RunWebhookServer(certPath, keyPath, 443)
+
+	/*
+		// Start HTTPS server
+		err := webhook.ListenAndServeTLS(":443", certPath, keyPath)
+		if err != nil {
+			logging.Errorf("error starting HTTPS server: %v", err)
+			os.Exit(1)
+		}
+	*/
 
 	stopChan := make(chan struct{})
 	errorChan := make(chan error)
