@@ -138,7 +138,7 @@ func ProcessNetworkSelection(pod *v1.Pod, networks []*types.NetworkSelectionElem
 			// Convert net.IPNet to a comma-separated string representation
 			var ipsAsString []string
 			for _, ipNet := range newips {
-				// Replace the '/' character with '|'
+				// Replace the '/' character with '-' and ':' with '_'
 				cidrString := strings.ReplaceAll(ipNet.String(), "/", "-")
 				cidrString = strings.ReplaceAll(cidrString, ":", "_")
 				ipsAsString = append(ipsAsString, cidrString)

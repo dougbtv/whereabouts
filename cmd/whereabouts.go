@@ -76,10 +76,20 @@ func cmdAdd(args *skel.CmdArgs, client *kubernetes.KubernetesIPAM, cniVersion st
 	ctx, cancel := context.WithTimeout(context.Background(), types.AddTimeLimit)
 	defer cancel()
 
-	newips, err := kubernetes.IPManagement(ctx, types.Allocate, client.Config, client)
+	logging.Debugf("!bang ================================== Trying IP from labels")
+	newips, err := kubernetes.IPFromLabels(ctx, types.Allocate, client.Config, client)
 	if err != nil {
-		logging.Errorf("Error at storage engine: %s", err)
-		return fmt.Errorf("error at storage engine: %w", err)
+		logging.Errorf("Error getting labels: %s", err)
+		return fmt.Errorf("Error getting labels: %w", err)
+	}
+
+	// If we didn't have a label, we process in "the old school format"
+	if len(newips) == 0 {
+		newips, err = kubernetes.IPManagement(ctx, types.Allocate, client.Config, client)
+		if err != nil {
+			logging.Errorf("Error at storage engine: %s", err)
+			return fmt.Errorf("error at storage engine: %w", err)
+		}
 	}
 
 	for _, newip := range newips {

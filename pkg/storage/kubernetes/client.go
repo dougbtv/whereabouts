@@ -116,6 +116,19 @@ func (i *Client) GetPod(namespace, name string) (*v1.Pod, error) {
 	return pod, nil
 }
 
+func (i *Client) SetPod(namespace string, pod *v1.Pod) (*v1.Pod, error) {
+	// Ensure the context is properly handled in your real application
+	updateOptions := metav1.UpdateOptions{}
+
+	// Update the pod with the new labels or any other modified fields
+	updatedPod, err := i.clientSet.CoreV1().Pods(namespace).Update(context.TODO(), pod, updateOptions)
+	if err != nil {
+		return nil, err
+	}
+
+	return updatedPod, nil
+}
+
 func (i *Client) ListOverlappingIPs(ctx context.Context) ([]whereaboutsv1alpha1.OverlappingRangeIPReservation, error) {
 	ctxWithTimeout, cancel := context.WithTimeout(ctx, storage.RequestTimeout)
 	defer cancel()

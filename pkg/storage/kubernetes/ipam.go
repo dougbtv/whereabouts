@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -390,6 +391,109 @@ func newLeaderElector(clientset kubernetes.Interface, namespace string, podNames
 		return nil, leaderOK, deposed
 	}
 	return le, leaderOK, deposed
+}
+
+/*
+// IPFromLabels processes labels created by the admission controller and assigns based on those
+// It manipulates the pod object to remove the labels after processing, as to process multiple instantiations
+func IPFromLabels(ctx context.Context, mode int, ipamConf whereaboutstypes.IPAMConfig, client *KubernetesIPAM) ([]net.IPNet, error) {
+	logging.Debugf("IPFromLabels -- mode: %v / containerID: %v / podRef: %v", mode, client.containerID, ipamConf.GetPodRef())
+	pod, err := client.GetPod(ipamConf.PodNamespace, ipamConf.PodName)
+	if err != nil {
+		return nil, err
+	}
+
+	logging.Verbosef("Pod: %v", pod)
+
+	// Here we want to
+	// First we want to check if any label matches "whereabouts"
+	// We return an empty list without an error if so.
+
+	// [...add code here...]
+
+	// If it does, then there may be labels in this format:
+	// whereabouts-0=10.10.0.4-16
+	// whereabouts-1=192.0.2.0-27,192.0.2.50-28
+
+	// We want to process from the lowest index upwards with the label name whereabouts-n
+	// Will only process those, and leave the next highest integer for the next run.
+	// So on that example list, we will only process the 0th elements.
+
+	// [...add code here...]
+
+	// Then we will parse those elements.
+	// First, get a list by comma separated values
+	// Then, we convert each item by replacing | with a :, and - with a /
+	// Then, we we convert to an IP address using the net package
+	// And we keep a []net.IPNet, which we will return
+
+	// Then we want to set pod to remove the label we just processed.
+	// Use the new SetPod method in the client.
+
+	// [...add code here...]
+
+	// And return the []net.IPNet
+}
+*/
+
+// IPFromLabels processes labels created by the admission controller and assigns based on those
+func IPFromLabels(ctx context.Context, mode int, ipamConf whereaboutstypes.IPAMConfig, client *KubernetesIPAM) ([]net.IPNet, error) {
+	logging.Debugf("IPFromLabels -- mode: %v / containerID: %v / podRef: %v", mode, client.containerID, ipamConf.GetPodRef())
+	pod, err := client.GetPod(ipamConf.PodNamespace, ipamConf.PodName)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter labels for those starting with "whereabouts"
+	var keys []int
+	labelPrefix := "whereabouts-"
+	for key := range pod.Labels {
+		if strings.HasPrefix(key, labelPrefix) {
+			indexStr := strings.TrimPrefix(key, labelPrefix)
+			index, err := strconv.Atoi(indexStr)
+			if err == nil {
+				keys = append(keys, index)
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return []net.IPNet{}, nil // No relevant labels found
+	}
+
+	// Sort the keys to process in ascending order
+	sort.Ints(keys)
+
+	// Prepare to collect IPNet slices
+	var cidrs []net.IPNet
+
+	// Process the first key only
+	if len(keys) > 0 {
+		key := fmt.Sprintf("%s%d", labelPrefix, keys[0])
+		cidrStrings := strings.Split(pod.Labels[key], ",")
+		for _, s := range cidrStrings {
+			// Convert _ to :, and - to /
+			s = strings.Replace(s, "_", ":", -1)
+			s = strings.Replace(s, "-", "/", -1)
+
+			_, ipNet, err := net.ParseCIDR(s)
+			if err != nil {
+				logging.Errorf("Failed to parse CIDR from label: %v", err)
+				return nil, err
+			}
+			cidrs = append(cidrs, *ipNet)
+		}
+
+		// Remove processed label
+		delete(pod.Labels, key)
+
+		// Update the pod
+		_, err = client.SetPod(ipamConf.PodNamespace, pod)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return cidrs, nil
 }
 
 // IPManagement manages ip allocation and deallocation from a storage perspective
