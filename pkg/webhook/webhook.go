@@ -69,15 +69,15 @@ type NoK8sNetworkError struct {
 
 func (e *NoK8sNetworkError) Error() string { return e.message }
 
-// GetPodNetwork gets net-attach-def annotation from pod
-func GetPodNetwork(pod *v1.Pod) ([]*types.NetworkSelectionElement, error) {
-	// logging.Debugf("!bang GetPodNetwork POD DETAILS: %v", pod)
+// GetNetworkSelectionAnnotation gets net-attach-def annotation from pod
+func GetNetworkSelectionAnnotation(pod *v1.Pod) ([]*types.NetworkSelectionElement, error) {
+	// logging.Debugf("!bang GetNetworkSelectionAnnotation POD DETAILS: %v", pod)
 
 	netAnnot := pod.Annotations[networkAttachmentAnnot]
 	defaultNamespace := pod.ObjectMeta.Namespace
 
 	if len(netAnnot) == 0 {
-		return nil, &NoK8sNetworkError{"no kubernetes network found"}
+		return nil, &NoK8sNetworkError{"no Whereabouts networks found in selection"}
 	}
 
 	networks, err := parsePodNetworkAnnotation(netAnnot, defaultNamespace)
@@ -262,7 +262,7 @@ func ProcessNetworkSelection(pod *v1.Pod, networks []*types.NetworkSelectionElem
 			labellist[fmt.Sprintf("whereabouts-%d", idx)] = ipsList
 
 		} else {
-			return nil, &NoK8sNetworkError{"no kubernetes network found"}
+			return nil, &NoK8sNetworkError{"no Whereabouts networks found in selection"}
 		}
 
 	}
@@ -406,7 +406,7 @@ func getKubernetesDelegate(client *ClientInfo, net *types.NetworkSelectionElemen
 
 /*
 
-	networks, err := GetPodNetwork(pod)
+	networks, err := GetNetworkSelectionAnnotation(pod)
 	if networks != nil {
 		delegates, err := ProcessNetworkSelection(clientInfo, pod, networks, conf, resourceMap)
 
@@ -462,13 +462,13 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 	// !bang
 	var labellist map[string]string
 	whereaboutsfound := true
-	networks, err := GetPodNetwork(&pod)
+	networks, err := GetNetworkSelectionAnnotation(&pod)
 	if networks != nil {
 		labellist, err = ProcessNetworkSelection(&pod, networks)
 		if err != nil {
 			if _, ok := err.(*NoK8sNetworkError); ok {
 				whereaboutsfound = false
-				logging.Verbosef("no kubernetes network found for pod: %v/%v", pod.Namespace, pod.Name)
+				logging.Verbosef("no Whereabouts networks found in selection for pod: %v/%v", pod.Namespace, pod.Name)
 				// return
 			}
 		}
@@ -530,6 +530,16 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 	w.Write(resp)
 }
 
+// Request represents the necessary info from http.Request to process
+type Request struct {
+	w    http.ResponseWriter
+	r    *http.Request
+	done chan bool // To signal when processing is complete
+}
+
+// requestChannel to queue incoming requests
+var requestChannel = make(chan Request, 250) // Buffer size of 250, adjust as needed
+
 func RunWebhookServer(certFile, keyFile string, port int) error {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
@@ -537,7 +547,8 @@ func RunWebhookServer(certFile, keyFile string, port int) error {
 	}
 
 	logging.Verbosef("Starting webhook server")
-	http.HandleFunc("/mutate", mutatePod)
+	http.HandleFunc("/mutate", enqueueRequest)
+
 	server := http.Server{
 		Addr: fmt.Sprintf(":%d", port),
 		TLSConfig: &tls.Config{
@@ -546,6 +557,8 @@ func RunWebhookServer(certFile, keyFile string, port int) error {
 		ErrorLog: log.New(os.Stdout, "", 0), // Direct error logs to stdout
 	}
 
+	go processRequests() // Start processing requests from the channel
+
 	go func() {
 		if err := server.ListenAndServeTLS("", ""); err != nil {
 			logging.Errorf("Webhook server error: %v", err)
@@ -553,4 +566,19 @@ func RunWebhookServer(certFile, keyFile string, port int) error {
 	}()
 
 	return nil
+}
+
+// enqueueRequest queues the request for processing
+func enqueueRequest(w http.ResponseWriter, r *http.Request) {
+	done := make(chan bool)
+	requestChannel <- Request{w, r, done}
+	<-done // Wait for the request to be processed
+}
+
+// processRequests processes requests serially from the requestChannel
+func processRequests() {
+	for req := range requestChannel {
+		mutatePod(req.w, req.r) // Process request
+		req.done <- true        // Signal completion
+	}
 }
