@@ -85,44 +85,48 @@ func GetNetworkSelectionAnnotation(pod *v1.Pod) ([]*types.NetworkSelectionElemen
 }
 
 // ProcessNetworkSelection returns delegatenetconf from net-attach-def annotation in pod
-func ProcessNetworkSelection(pod *v1.Pod, networks []*types.NetworkSelectionElement) (map[string]string, error) {
+func ProcessNetworkSelection(pod *v1.Pod, networks []*types.NetworkSelectionElement) (map[string]string, string, error) {
 	// logging.Debugf("ProcessNetworkSelection: %v, %v", pod, networks)
 	cconfig, err := rest.InClusterConfig()
 	if err != nil {
-		return nil, fmt.Errorf("failed to implicitly generate the kubeconfig: %w", err)
+		return nil, "", fmt.Errorf("failed to implicitly generate the kubeconfig: %w", err)
 	}
 
 	nc, err := netclient.NewForConfig(cconfig)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
+
+	var uuid string
 
 	labellist := make(map[string]string)
 	for idx, net := range networks {
 		logging.Verbosef("!bang each ProcessNetworkSelection: %v / %v", net.Namespace, net.Name)
 		netattach, err := nc.K8sCniCncfIoV1().NetworkAttachmentDefinitions(net.Namespace).Get(context.TODO(), net.Name, metav1.GetOptions{})
 		if err != nil {
-			return nil, err
+			return nil, uuid, err
 		}
 		logging.Verbosef("!bang ProcessNetworkSelection NET-ATTACH-DEF: %v", netattach)
 
 		// NEXT!
 		// We  need to parse the delegate to see if it's from Whereabouts
 		if strings.Contains(netattach.Spec.Config, "whereabouts") {
+
+			uuid = generateUUID()
+			uuidPath := fmt.Sprintf("%s-%s", "whereabouts", uuid)
+			logging.Verbosef("!bang UUID PATH: %v", uuidPath)
+
 			// Then we need to get the IPAM config from within it. Or do we? I don't think we do.
 			// Then we need to emulate a CNI ADD...
 			ipamConf, _, err := config.LoadIPAMConfig([]byte(netattach.Spec.Config), cniArgs(pod.Namespace, pod.Name))
 			if err != nil {
 				logging.Errorf("IPAM configuration load failed: %s", err)
-				return nil, err
+				return nil, uuid, err
 			}
-
-			uuidPath := generateUUIDPath("whereabouts/tmp")
-			logging.Verbosef("!bang UUID PATH: %v", uuidPath)
 
 			k8sipam, err := kubernetes.NewKubernetesIPAM(uuidPath, *ipamConf)
 			if err != nil {
-				return nil, logging.Errorf("failed to create Kubernetes IPAM manager: %v", err)
+				return nil, uuid, logging.Errorf("failed to create Kubernetes IPAM manager: %v", err)
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), types.AddTimeLimit)
@@ -149,12 +153,12 @@ func ProcessNetworkSelection(pod *v1.Pod, networks []*types.NetworkSelectionElem
 			labellist[fmt.Sprintf("whereabouts-%d", idx)] = ipsList
 
 		} else {
-			return nil, &NoK8sNetworkError{"no Whereabouts networks found in selection"}
+			return nil, uuid, &NoK8sNetworkError{"no Whereabouts networks found in selection"}
 		}
 
 	}
 
-	return labellist, nil
+	return labellist, uuid, nil
 }
 
 func cniArgs(podNamespace string, podName string) string {
@@ -200,11 +204,12 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// !bang
+	var uuid string
 	var labellist map[string]string
 	whereaboutsfound := true
 	networks, err := GetNetworkSelectionAnnotation(&pod)
 	if networks != nil {
-		labellist, err = ProcessNetworkSelection(&pod, networks)
+		labellist, uuid, err = ProcessNetworkSelection(&pod, networks)
 		if err != nil {
 			if _, ok := err.(*NoK8sNetworkError); ok {
 				whereaboutsfound = false
@@ -212,6 +217,7 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 				// return
 			}
 		}
+		labellist["uuid-whereabouts"] = uuid
 		logging.Verbosef("!bang labellist: %v", labellist)
 	} else {
 		whereaboutsfound = false
@@ -227,13 +233,21 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 
 		var patch []map[string]interface{}
 		patchType := admissionv1.PatchTypeJSONPatch
+
+		// Ensure the labels object exists
+		patch = append(patch, map[string]interface{}{
+			"op":    "add",
+			"path":  "/metadata/labels",
+			"value": map[string]string{}, // Initialize as an empty object if it doesn't exist
+		})
+
 		for key, value := range labellist {
+			// Encode the label key to handle any characters that aren't allowed in JSON Pointer paths
+			escapedKey := strings.Replace(key, "/", "~1", -1) // Escape '/' as '~1' as per JSON Pointer spec
 			patch = append(patch, map[string]interface{}{
-				"op":   "add",
-				"path": "/metadata/labels",
-				"value": map[string]string{
-					key: value,
-				},
+				"op":    "add",
+				"path":  fmt.Sprintf("/metadata/labels/%s", escapedKey),
+				"value": value,
 			})
 		}
 

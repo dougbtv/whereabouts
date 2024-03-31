@@ -124,7 +124,7 @@ func parsePodNetworkObjectName(podnetwork string) (string, string, string, error
 	return netNsName, networkName, netIfName, nil
 }
 
-func generateUUIDPath(prefix string) string {
+func generateUUID() string {
 	// Generate random bytes
 	uuidBytes := make([]byte, 16)
 	_, err := rand.Read(uuidBytes)
@@ -139,8 +139,5 @@ func generateUUIDPath(prefix string) string {
 	// Format the UUID as a string
 	uuidStr := fmt.Sprintf("%x-%x-%x-%x-%x", uuidBytes[0:4], uuidBytes[4:6], uuidBytes[6:8], uuidBytes[8:10], uuidBytes[10:])
 
-	// Concatenate the prefix with the UUID string representation
-	uuidPath := fmt.Sprintf("%s/%s", prefix, uuidStr)
-
-	return uuidPath
+	return uuidStr
 }

@@ -447,6 +447,7 @@ func IPFromLabels(ctx context.Context, mode int, ipamConf whereaboutstypes.IPAMC
 	// Filter labels for those starting with "whereabouts"
 	var keys []int
 	labelPrefix := "whereabouts-"
+	logging.Debugf("!bang Processing labels: %v", pod.Labels)
 	for key := range pod.Labels {
 		if strings.HasPrefix(key, labelPrefix) {
 			indexStr := strings.TrimPrefix(key, labelPrefix)
@@ -457,6 +458,7 @@ func IPFromLabels(ctx context.Context, mode int, ipamConf whereaboutstypes.IPAMC
 		}
 	}
 	if len(keys) == 0 {
+		logging.Verbosef("Notice: Unable to process IP from labels")
 		return []net.IPNet{}, nil // No relevant labels found
 	}
 
@@ -500,6 +502,7 @@ func IPFromLabels(ctx context.Context, mode int, ipamConf whereaboutstypes.IPAMC
 		}
 	}
 
+	logging.Debugf("Selected IPs using IPFromLabels: %v", cidrs)
 	return cidrs, nil
 }
 
