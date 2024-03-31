@@ -436,6 +436,29 @@ func IPFromLabels(ctx context.Context, mode int, ipamConf whereaboutstypes.IPAMC
 }
 */
 
+// DeallocateGivenLabels
+func DeallocateGivenLabels(ctx context.Context, ipamConf whereaboutstypes.IPAMConfig, client *KubernetesIPAM) (bool, error) {
+
+	found := false
+
+	pod, err := client.GetPod(ipamConf.PodNamespace, ipamConf.PodName)
+	if err != nil {
+		return found, err
+	}
+
+	logging.Debugf("!bang Processing labels: %v", pod.Labels)
+	for key := range pod.Labels {
+		if key == "uuid-whereabouts" {
+			logging.Debugf("Found label on DEL %s / %s", key, pod.Labels[key])
+			found = true
+			break
+		}
+	}
+
+	return found, nil
+
+}
+
 // IPFromLabels processes labels created by the admission controller and assigns based on those
 func IPFromLabels(ctx context.Context, mode int, ipamConf whereaboutstypes.IPAMConfig, client *KubernetesIPAM) ([]net.IPNet, error) {
 	logging.Debugf("IPFromLabels -- mode: %v / containerID: %v / podRef: %v", mode, client.containerID, ipamConf.GetPodRef())

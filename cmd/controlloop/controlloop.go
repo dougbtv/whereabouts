@@ -56,15 +56,6 @@ func main() {
 	keyPath := "/etc/webhook/certs/tls.key"
 	webhook.RunWebhookServer(certPath, keyPath, 443)
 
-	/*
-		// Start HTTPS server
-		err := webhook.ListenAndServeTLS(":443", certPath, keyPath)
-		if err != nil {
-			logging.Errorf("error starting HTTPS server: %v", err)
-			os.Exit(1)
-		}
-	*/
-
 	stopChan := make(chan struct{})
 	errorChan := make(chan error)
 	defer close(stopChan)

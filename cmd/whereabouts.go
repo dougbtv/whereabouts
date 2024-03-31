@@ -110,13 +110,23 @@ func cmdAdd(args *skel.CmdArgs, client *kubernetes.KubernetesIPAM, cniVersion st
 
 func cmdDel(args *skel.CmdArgs, client *kubernetes.KubernetesIPAM) error {
 	logging.Debugf("Beginning delete for ContainerID: %v", args.ContainerID)
-
 	ctx, cancel := context.WithTimeout(context.Background(), types.DelTimeLimit)
 	defer cancel()
 
-	_, err := kubernetes.IPManagement(ctx, types.Deallocate, client.Config, client)
+	logging.Debugf("!bang ================================== Trying DEL using Labels")
+	found, err := kubernetes.DeallocateGivenLabels(ctx, client.Config, client)
 	if err != nil {
-		logging.Verbosef("WARNING: Problem deallocating IP: %s", err)
+		logging.Errorf("Error deallocating using labels: %s", err)
+		return fmt.Errorf("Error deallocating using labels: %w", err)
+	}
+
+	if found {
+		logging.Debugf("Label style deallocation. No action taken.")
+	} else {
+		_, err := kubernetes.IPManagement(ctx, types.Deallocate, client.Config, client)
+		if err != nil {
+			logging.Verbosef("WARNING: Problem deallocating IP: %s", err)
+		}
 	}
 
 	return nil
