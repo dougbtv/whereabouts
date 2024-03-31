@@ -471,17 +471,24 @@ func IPFromLabels(ctx context.Context, mode int, ipamConf whereaboutstypes.IPAMC
 		key := fmt.Sprintf("%s%d", labelPrefix, keys[0])
 		cidrStrings := strings.Split(pod.Labels[key], ",")
 		for _, s := range cidrStrings {
-			// Convert _ to :, and - to /
-			s = strings.Replace(s, "_", ":", -1)
+			// Convert | to :, and - to / for CIDR notation
+			s = strings.Replace(s, "|", ":", -1)
 			s = strings.Replace(s, "-", "/", -1)
+			logging.Verbosef("!bang Processing label %s: %s", key, s)
 
-			_, ipNet, err := net.ParseCIDR(s)
+			specificIP, ipNet, err := net.ParseCIDR(s)
 			if err != nil {
 				logging.Errorf("Failed to parse CIDR from label: %v", err)
 				return nil, err
 			}
+
+			// Now, set the IP in ipNet to the specific IP we parsed
+			ipNet.IP = specificIP
+
+			// Append the adjusted ipNet to our slice
 			cidrs = append(cidrs, *ipNet)
 		}
+		logging.Verbosef("!bang CIDRs: %v", cidrs)
 
 		// Remove processed label
 		delete(pod.Labels, key)
