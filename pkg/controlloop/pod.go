@@ -15,7 +15,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/util/wait"
 	v1coreinformerfactory "k8s.io/client-go/informers"
 	v1corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
@@ -39,7 +38,7 @@ import (
 )
 
 const (
-	defaultMountPath      = "/host"
+	defaultMountPath      = "/"
 	ipReconcilerQueueName = "pod-updates"
 	syncPeriod            = time.Second
 	whereaboutsConfigPath = "/etc/cni/net.d/whereabouts.d/whereabouts.conf"
@@ -57,7 +56,7 @@ const (
 	noResyncPeriod                   = 0
 )
 
-type garbageCollector func(ctx context.Context, mode int, ipamConf types.IPAMConfig, client *wbclient.KubernetesIPAM) ([]net.IPNet, error)
+type garbageCollector func(ctx context.Context, mode int, client *wbclient.KubernetesIPAM, ipamConf types.IPAMConfig, containerID string, podRef string) ([]net.IPNet, error)
 
 type PodController struct {
 	k8sClient               kubernetes.Interface
@@ -79,8 +78,8 @@ type PodController struct {
 }
 
 // NewPodController ...
-func NewPodController(k8sCoreClient kubernetes.Interface, wbClient wbclientset.Interface, k8sCoreInformerFactory v1coreinformerfactory.SharedInformerFactory, wbSharedInformerFactory wbinformers.SharedInformerFactory, netAttachDefInformerFactory nadinformers.SharedInformerFactory, broadcaster record.EventBroadcaster, recorder record.EventRecorder) *PodController {
-	return newPodController(k8sCoreClient, wbClient, k8sCoreInformerFactory, wbSharedInformerFactory, netAttachDefInformerFactory, broadcaster, recorder, wbclient.IPManagement)
+func NewPodController(k8sCoreClient kubernetes.Interface, wbClient wbclientset.Interface, k8sCoreInformerFactory v1coreinformerfactory.SharedInformerFactory, wbSharedInformerFactory wbinformers.SharedInformerFactory, netAttachDefInformerFactory nadinformers.SharedInformerFactory, broadcaster record.EventBroadcaster, recorder record.EventRecorder, workQueueIn workqueue.RateLimitingInterface) *PodController {
+	return newPodController(k8sCoreClient, wbClient, k8sCoreInformerFactory, wbSharedInformerFactory, netAttachDefInformerFactory, broadcaster, recorder, wbclient.IPManagementKubernetesUpdate, workQueueIn)
 }
 
 // PodInformerFactory is a wrapper around NewSharedInformerFactoryWithOptions. Before returning the informer, it will
@@ -99,7 +98,7 @@ func PodInformerFactory(k8sClientSet kubernetes.Interface) (v1coreinformerfactor
 			})), nil
 }
 
-func newPodController(k8sCoreClient kubernetes.Interface, wbClient wbclientset.Interface, k8sCoreInformerFactory v1coreinformerfactory.SharedInformerFactory, wbSharedInformerFactory wbinformers.SharedInformerFactory, netAttachDefInformerFactory nadinformers.SharedInformerFactory, broadcaster record.EventBroadcaster, recorder record.EventRecorder, cleanupFunc garbageCollector) *PodController {
+func newPodController(k8sCoreClient kubernetes.Interface, wbClient wbclientset.Interface, k8sCoreInformerFactory v1coreinformerfactory.SharedInformerFactory, wbSharedInformerFactory wbinformers.SharedInformerFactory, netAttachDefInformerFactory nadinformers.SharedInformerFactory, broadcaster record.EventBroadcaster, recorder record.EventRecorder, cleanupFunc garbageCollector, workQueueIn workqueue.RateLimitingInterface) *PodController {
 	k8sPodFilteredInformer := k8sCoreInformerFactory.Core().V1().Pods()
 	ipPoolInformer := wbSharedInformerFactory.Whereabouts().V1alpha1().IPPools()
 	netAttachDefInformer := netAttachDefInformerFactory.K8sCniCncfIo().V1().NetworkAttachmentDefinitions()
@@ -108,14 +107,16 @@ func newPodController(k8sCoreClient kubernetes.Interface, wbClient wbclientset.I
 	networksInformer := netAttachDefInformer.Informer()
 	podsInformer := k8sPodFilteredInformer.Informer()
 
-	queue := workqueue.NewNamedRateLimitingQueue(
-		workqueue.DefaultControllerRateLimiter(),
-		ipReconcilerQueueName)
+	/*
+		queue := workqueue.NewNamedRateLimitingQueue(
+			workqueue.DefaultControllerRateLimiter(),
+			ipReconcilerQueueName)
+	*/
 
 	podsInformer.AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
 			DeleteFunc: func(obj interface{}) {
-				onPodDelete(queue, obj)
+				onPodDelete(workQueueIn, obj)
 			},
 		})
 
@@ -133,7 +134,7 @@ func newPodController(k8sCoreClient kubernetes.Interface, wbClient wbclientset.I
 		podLister:               k8sPodFilteredInformer.Lister(),
 		ipPoolLister:            ipPoolInformer.Lister(),
 		netAttachDefLister:      netAttachDefInformer.Lister(),
-		workqueue:               queue,
+		workqueue:               workQueueIn,
 		cleanupFunc:             cleanupFunc,
 	}
 }
@@ -146,7 +147,7 @@ func (pc *PodController) Start(stopChan <-chan struct{}) {
 		logging.Verbosef("failed waiting for caches to sync")
 	}
 
-	go wait.Until(pc.worker, syncPeriod, stopChan)
+	// go wait.Until(pc.worker, syncPeriod, stopChan)
 }
 
 // Shutdown stops the PodController worker queue
@@ -154,23 +155,29 @@ func (pc *PodController) Shutdown() {
 	pc.workqueue.ShutDown()
 }
 
-func (pc *PodController) worker() {
-	for pc.processNextWorkItem() {
-	}
-}
+// func (pc *PodController) worker() {
+// 	for pc.processNextWorkItem() {
+// 	}
+// }
 
-func (pc *PodController) processNextWorkItem() bool {
-	queueItem, shouldQuit := pc.workqueue.Get()
-	if shouldQuit {
-		return false
-	}
-	defer pc.workqueue.Done(queueItem)
+func (pc *PodController) ProcessNextWorkItem(queueItem interface{}) bool {
+	logging.Verbosef("!bang processing WORK ITEM FROM PODCONTROLLER")
+	/*
+		queueItem, shouldQuit := pc.workqueue.Get()
+		if shouldQuit {
+			logging.Verbosef("!bang processing WORK ITEM FROM PODCONTROLLER: false")
+			return false
+		}
+
+		defer pc.workqueue.Done(queueItem)
+	*/
 
 	pod := queueItem.(*v1.Pod)
 	err := pc.garbageCollectPodIPs(pod)
 	logging.Verbosef("result of garbage collecting pods: %+v", err)
 	pc.handleResult(pod, err)
 
+	logging.Verbosef("!bang processing WORK ITEM FROM PODCONTROLLER: true")
 	return true
 }
 
@@ -225,17 +232,12 @@ func (pc *PodController) garbageCollectPodIPs(pod *v1.Pod) error {
 				if allocation.PodRef == podID(podNamespace, podName) {
 					logging.Verbosef("stale allocation to cleanup: %+v", allocation)
 
-					client := *wbclient.NewKubernetesClient(nil, pc.k8sClient, 0)
-					wbClient := &wbclient.KubernetesIPAM{
-						Client: client,
-						Config: *ipamConfig,
-					}
-
+					k8sipam, err := wbclient.NewKubernetesIPAM(allocation.ContainerID, *ipamConfig)
 					if err != nil {
 						logging.Debugf("error while generating the IPAM client: %v", err)
 						continue
 					}
-					if _, err := pc.cleanupFunc(context.TODO(), types.Deallocate, *ipamConfig, wbClient); err != nil {
+					if _, err := pc.cleanupFunc(context.TODO(), types.Deallocate, k8sipam, *ipamConfig, allocation.ContainerID, allocation.PodRef); err != nil {
 						logging.Errorf("failed to cleanup allocation: %v", err)
 					}
 					if err := pc.addressGarbageCollected(pod, nad.GetName(), pool.Spec.Range, allocationIndex); err != nil {

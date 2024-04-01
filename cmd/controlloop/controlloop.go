@@ -10,11 +10,13 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/go-co-op/gocron/v2"
 	corev1 "k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 
 	nadclient "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/clientset/versioned"
 	nadinformers "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/informers/externalversions"
@@ -52,9 +54,12 @@ func main() {
 	}
 	logging.SetLogStderr(true)
 
+	// Create a named rate limiting queue
+	workQueue := workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "WhereaboutsUnifiedQueue")
+
 	certPath := "/etc/webhook/certs/tls.crt"
 	keyPath := "/etc/webhook/certs/tls.key"
-	webhook.RunWebhookServer(certPath, keyPath, 443)
+	webhook.RunWebhookServer(certPath, keyPath, 443, workQueue)
 
 	stopChan := make(chan struct{})
 	errorChan := make(chan error)
@@ -62,7 +67,7 @@ func main() {
 	defer close(errorChan)
 	handleSignals(stopChan, os.Interrupt)
 
-	networkController, err := newPodController(stopChan)
+	networkController, err := newPodController(stopChan, workQueue)
 	if err != nil {
 		_ = logging.Errorf("could not create the pod networks controller: %v", err)
 		os.Exit(couldNotCreateController)
@@ -70,6 +75,31 @@ func main() {
 
 	networkController.Start(stopChan)
 	defer networkController.Shutdown()
+
+	go func() {
+		for {
+			queueItem, shutdown := workQueue.Get()
+			if shutdown {
+				break
+			}
+			defer workQueue.Done(queueItem)
+
+			// Type assertion or switch to determine the type of queueItem and call the appropriate processing function
+			switch queueItem := queueItem.(type) {
+			case *v1.Pod:
+				// Process for pod controller
+				_ = networkController.ProcessNextWorkItem(queueItem)
+			case webhook.Request:
+				// Unsure what type to put here?
+				// Process for webhook task
+				webhook.ProcessSingleRequest(queueItem)
+			default:
+				logging.Errorf("Unknown type: %T", queueItem)
+			}
+
+			workQueue.Done(queueItem)
+		}
+	}()
 
 	s, err := gocron.NewScheduler(gocron.WithLocation(time.UTC))
 	if err != nil {
@@ -129,7 +159,7 @@ func handleSignals(stopChannel chan struct{}, signals ...os.Signal) {
 	}()
 }
 
-func newPodController(stopChannel chan struct{}) (*controlloop.PodController, error) {
+func newPodController(stopChannel chan struct{}, workQueue workqueue.RateLimitingInterface) (*controlloop.PodController, error) {
 	cfg, err := rest.InClusterConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to implicitly generate the kubeconfig: %w", err)
@@ -167,7 +197,8 @@ func newPodController(stopChannel chan struct{}) (*controlloop.PodController, er
 		ipPoolInformerFactory,
 		netAttachDefInformerFactory,
 		eventBroadcaster,
-		newEventRecorder(eventBroadcaster))
+		newEventRecorder(eventBroadcaster),
+		workQueue)
 	logging.Verbosef("pod controller created")
 
 	logging.Verbosef("Starting informer factories ...")

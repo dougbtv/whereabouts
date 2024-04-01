@@ -593,9 +593,11 @@ func IPManagement(ctx context.Context, mode int, ipamConf whereaboutstypes.IPAMC
 }
 
 // IPManagementKubernetesUpdate manages k8s updates
+// func                          (ctx context.Context, mode int, client *wbclient.KubernetesIPAM, ipamConf types.IPAMConfig, containerID string, podRef string) ([]net.IPNet, error)
 func IPManagementKubernetesUpdate(ctx context.Context, mode int, ipam *KubernetesIPAM, ipamConf whereaboutstypes.IPAMConfig,
 	containerID string, podRef string) ([]net.IPNet, error) {
-	logging.Debugf("IPManagement -- mode: %v / containerID: %v / podRef: %v", mode, containerID, podRef)
+	logging.Debugf("IPManagementKubernetesUpdate -- mode: %v / containerID: %v / podRef: %v", mode, containerID, podRef)
+	logging.Debugf("IPManagementKubernetesUpdate -- ipam: %v / ipamConf: %v", ipam, ipamConf)
 
 	var newips []net.IPNet
 	var newip net.IPNet

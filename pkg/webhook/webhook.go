@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 
+	"k8s.io/client-go/util/workqueue"
+
 	netclient "github.com/k8snetworkplumbingwg/network-attachment-definition-client/pkg/client/clientset/versioned"
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/config"
 	"github.com/k8snetworkplumbingwg/whereabouts/pkg/logging"
@@ -291,12 +293,15 @@ type Request struct {
 
 // requestChannel to queue incoming requests
 var requestChannel = make(chan Request, 250) // Buffer size of 250, adjust as needed
+var workQueue workqueue.RateLimitingInterface
 
-func RunWebhookServer(certFile, keyFile string, port int) error {
+func RunWebhookServer(certFile, keyFile string, port int, workQueueIn workqueue.RateLimitingInterface) error {
 	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 	if err != nil {
 		return err
 	}
+
+	workQueue = workQueueIn
 
 	logging.Verbosef("Starting webhook server")
 	http.HandleFunc("/mutate", enqueueRequest)
@@ -309,7 +314,7 @@ func RunWebhookServer(certFile, keyFile string, port int) error {
 		ErrorLog: log.New(os.Stdout, "", 0), // Direct error logs to stdout
 	}
 
-	go processRequests() // Start processing requests from the channel
+	// go processRequests() // Start processing requests from the channel
 
 	go func() {
 		if err := server.ListenAndServeTLS("", ""); err != nil {
@@ -322,9 +327,10 @@ func RunWebhookServer(certFile, keyFile string, port int) error {
 
 // enqueueRequest queues the request for processing
 func enqueueRequest(w http.ResponseWriter, r *http.Request) {
+	logging.Debugf("!bang enqueueRequest...")
 	done := make(chan bool)
-	requestChannel <- Request{w, r, done}
-	<-done // Wait for the request to be processed
+	workQueue.Add(Request{w, r, done})
+	<-done // Wait for processing to complete
 }
 
 // processRequests processes requests serially from the requestChannel
@@ -333,4 +339,13 @@ func processRequests() {
 		mutatePod(req.w, req.r) // Process request
 		req.done <- true        // Signal completion
 	}
+}
+
+func ProcessSingleRequest(queueItem interface{}) {
+
+	req := queueItem.(Request)
+	mutatePod(req.w, req.r) // Process request
+	workQueue.Forget(req)
+	req.done <- true // Signal completion
+
 }
