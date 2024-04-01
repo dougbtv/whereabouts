@@ -231,15 +231,21 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 
 	if whereaboutsfound {
 
+		// bang! commented starting here.
 		var patch []map[string]interface{}
 		patchType := admissionv1.PatchTypeJSONPatch
 
-		// Ensure the labels object exists
-		patch = append(patch, map[string]interface{}{
-			"op":    "add",
-			"path":  "/metadata/labels",
-			"value": map[string]string{}, // Initialize as an empty object if it doesn't exist
-		})
+		// Assuming `pod` is already decoded from the AdmissionReview request
+		labelsExist := len(pod.ObjectMeta.Labels) > 0
+
+		// If no labels exist, initialize them
+		if !labelsExist {
+			patch = append(patch, map[string]interface{}{
+				"op":    "add",
+				"path":  "/metadata/labels",
+				"value": map[string]string{}, // Initialize as an empty object
+			})
+		}
 
 		for key, value := range labellist {
 			// Encode the label key to handle any characters that aren't allowed in JSON Pointer paths
@@ -262,6 +268,7 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 		// Set the patch and patch type in the admission response
 		admissionResponse.PatchType = &patchType
 		admissionResponse.Patch = patchBytes
+		// bang! commented ending here.
 
 	}
 
