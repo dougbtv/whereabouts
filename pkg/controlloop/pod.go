@@ -14,7 +14,6 @@ import (
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	v1coreinformerfactory "k8s.io/client-go/informers"
 	v1corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
@@ -94,7 +93,7 @@ func PodInformerFactory(k8sClientSet kubernetes.Interface) (v1coreinformerfactor
 	return v1coreinformerfactory.NewSharedInformerFactoryWithOptions(
 		k8sClientSet, noResyncPeriod, v1coreinformerfactory.WithTweakListOptions(
 			func(options *metav1.ListOptions) {
-				options.FieldSelector = fields.OneTermEqualSelector(podControllerFilterKey, nodeName).String()
+				// options.FieldSelector = fields.OneTermEqualSelector(podControllerFilterKey, nodeName).String()
 			})), nil
 }
 

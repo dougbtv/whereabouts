@@ -114,3 +114,39 @@ replicaset.apps/sample-replicaset created
 All replicas are in 'Running' state! Took 24 seconds.
 ```
 
+Bigger cluster, 5x workers, 350 pods:
+
+```
+[fedora@bigcluster-master-1 whereabouts]$ ./hack/timer.sh 350
+networkattachmentdefinition.k8s.cni.cncf.io/bridge-conf unchanged
+replicaset.apps/sample-replicaset created
+All replicas are in 'Running' state! Took 113 seconds.
+```
+
+And... not better than current HEAD...
+
+```
+[fedora@bigcluster-master-1 whereabouts]$ ./hack/timer.sh 350
+networkattachmentdefinition.k8s.cni.cncf.io/bridge-conf unchanged
+replicaset.apps/sample-replicaset created
+All replicas are in 'Running' state! Took 108 seconds.
+```
+
+And with the admission controller, 5x workers, 500 pods...
+
+```
+[fedora@bigcluster-master-1 whereabouts]$ ./hack/timer.sh 500
+networkattachmentdefinition.k8s.cni.cncf.io/bridge-conf unchanged
+replicaset.apps/sample-replicaset created
+All replicas are in 'Running' state! Took 150 seconds.
+```
+
+And with HEAD, sliiiightly longer.
+
+```
+[fedora@bigcluster-master-1 whereabouts]$ ./hack/timer.sh 500
+networkattachmentdefinition.k8s.cni.cncf.io/bridge-conf unchanged
+replicaset.apps/sample-replicaset created
+All replicas are in 'Running' state! Took 156 seconds.
+```
+

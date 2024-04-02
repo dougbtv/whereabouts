@@ -196,12 +196,12 @@ spec:
       serviceAccountName: whereabouts
       containers:
       - name: whereabouts-ip-controller
-        command: [ "/tmp/ip-control-loop" ]
-        securityContext:
-          privileged: true
+        command: [ "/ip-control-loop" ]
         args:
           - -log-level
           - debug
+        securityContext:
+          privileged: true
         image: quay.io/dosmith/whereabouts:admissioncontroller
         ports:
         - containerPort: 443
