@@ -26,6 +26,9 @@ type Client struct {
 
 func NewClient(timeout time.Duration) (*Client, error) {
 	config, err := rest.InClusterConfig()
+	config.QPS = 1000
+	config.Burst = 1000
+
 	if err != nil {
 		return nil, err
 	}
@@ -37,6 +40,8 @@ func NewClientViaKubeconfig(kubeconfigPath string, timeout time.Duration) (*Clie
 	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
 		&clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfigPath},
 		&clientcmd.ConfigOverrides{}).ClientConfig()
+	config.QPS = 1000
+	config.Burst = 1000
 
 	if err != nil {
 		return nil, err

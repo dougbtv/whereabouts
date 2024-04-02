@@ -150,3 +150,13 @@ replicaset.apps/sample-replicaset created
 All replicas are in 'Running' state! Took 156 seconds.
 ```
 
+And then 350 pods with QPS bumped to 1000
+
+```
+[fedora@bigcluster-master-1 whereabouts]$ ./hack/timer.sh 350
+networkattachmentdefinition.k8s.cni.cncf.io/bridge-conf unchanged
+replicaset.apps/sample-replicaset created
+All replicas are in 'Running' state! Took 93 seconds.
+```
+
+And 99 seconds.

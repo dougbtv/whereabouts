@@ -161,6 +161,8 @@ func handleSignals(stopChannel chan struct{}, signals ...os.Signal) {
 
 func newPodController(stopChannel chan struct{}, workQueue workqueue.RateLimitingInterface) (*controlloop.PodController, error) {
 	cfg, err := rest.InClusterConfig()
+	cfg.QPS = 1000
+	cfg.Burst = 1000
 	if err != nil {
 		return nil, fmt.Errorf("failed to implicitly generate the kubeconfig: %w", err)
 	}
