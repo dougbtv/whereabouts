@@ -100,6 +100,7 @@ func ProcessNetworkSelection(pod *v1.Pod, networks []*types.NetworkSelectionElem
 	}
 
 	var uuid string
+	var uuidPath string
 
 	labellist := make(map[string]string)
 	for idx, net := range networks {
@@ -115,25 +116,36 @@ func ProcessNetworkSelection(pod *v1.Pod, networks []*types.NetworkSelectionElem
 		if strings.Contains(netattach.Spec.Config, "whereabouts") {
 
 			uuid = generateUUID()
-			uuidPath := fmt.Sprintf("%s-%s", "whereabouts", uuid)
+			uuidPath = fmt.Sprintf("%s-%s", "whereabouts", uuid)
 			logging.Verbosef("!bang UUID PATH: %v", uuidPath)
 
 			// Then we need to get the IPAM config from within it. Or do we? I don't think we do.
 			// Then we need to emulate a CNI ADD...
-			ipamConf, _, err := config.LoadIPAMConfig([]byte(netattach.Spec.Config), cniArgs(pod.Namespace, pod.Name))
+			podNamespace := pod.GetNamespace()
+			podName := pod.GetName()
+			usepodref := podNamespace + "/" + podName
+			if podName == "" {
+				logging.Debugf("WARNING: Pod name is empty (likely from replicaset), using UUID as pod name: %v", uuidPath)
+				podName = uuidPath
+				usepodref = podNamespace + "/" + uuidPath
+			}
+
+			logging.Debugf("!bang podName: %v, podNamespace: %v", podName, podNamespace)
+			ipamConf, _, err := config.LoadIPAMConfig([]byte(netattach.Spec.Config), cniArgs(podNamespace, podName))
 			if err != nil {
 				logging.Errorf("IPAM configuration load failed: %s", err)
-				return nil, uuid, err
+				return nil, uuidPath, err
 			}
 
 			k8sipam, err := kubernetes.NewKubernetesIPAM(uuidPath, *ipamConf)
 			if err != nil {
-				return nil, uuid, logging.Errorf("failed to create Kubernetes IPAM manager: %v", err)
+				return nil, uuidPath, logging.Errorf("failed to create Kubernetes IPAM manager: %v", err)
 			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), types.AddTimeLimit)
 			defer cancel()
-			newips, err := kubernetes.IPManagementKubernetesUpdate(ctx, types.Allocate, k8sipam, *ipamConf, uuidPath, ipamConf.GetPodRef())
+			logging.Debugf("!bang usepodref on IPManagementKubernetesUpdate(): %v", usepodref)
+			newips, err := kubernetes.IPManagementKubernetesUpdate(ctx, types.Allocate, k8sipam, *ipamConf, uuidPath, usepodref)
 
 			logging.Verbosef("!bang NEWIPS: %v", newips)
 
@@ -155,12 +167,12 @@ func ProcessNetworkSelection(pod *v1.Pod, networks []*types.NetworkSelectionElem
 			labellist[fmt.Sprintf("whereabouts-%d", idx)] = ipsList
 
 		} else {
-			return nil, uuid, &NoK8sNetworkError{"no Whereabouts networks found in selection"}
+			return nil, uuidPath, &NoK8sNetworkError{"no Whereabouts networks found in selection"}
 		}
 
 	}
 
-	return labellist, uuid, nil
+	return labellist, uuidPath, nil
 }
 
 func cniArgs(podNamespace string, podName string) string {
@@ -204,6 +216,8 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(msg))
 		return
 	}
+
+	// logging.Debugf("!bang pod: %+v", pod)
 
 	// !bang
 	var uuid string

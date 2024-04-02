@@ -227,9 +227,19 @@ func (pc *PodController) garbageCollectPodIPs(pod *v1.Pod) error {
 			pools = append(pools, pool)
 		}
 
+		// Check if for pod label named "uuid-whereabouts" is set
+		podUUID := "!placeholder"
+		if _, ok := pod.Labels["uuid-whereabouts"]; ok {
+			podUUID = podNamespace + "/" + pod.Labels["uuid-whereabouts"]
+		}
+
 		for _, pool := range pools {
 			for allocationIndex, allocation := range pool.Spec.Allocations {
-				if allocation.PodRef == podID(podNamespace, podName) {
+				logging.Debugf("!bang comparing allocation podRef %s with podID %s", allocation.PodRef, podID(podNamespace, podName))
+				logging.Debugf("!bang comparing allocation podRef %s with podUUID %s", allocation.PodRef, podUUID)
+				logging.Debugf("!bang comparison results in: %t", allocation.PodRef == podUUID)
+				if allocation.PodRef == podID(podNamespace, podName) || allocation.PodRef == podUUID {
+					// !bang - trying to get here.
 					logging.Verbosef("stale allocation to cleanup: %+v", allocation)
 
 					k8sipam, err := wbclient.NewKubernetesIPAM(allocation.ContainerID, *ipamConfig)
