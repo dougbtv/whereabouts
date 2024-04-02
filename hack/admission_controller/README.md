@@ -75,3 +75,42 @@ tail -f /tmp/whereabouts.log
 Be sure to copy the modified cni binary because it's critical.
 
 
+## Scaling notes
+
+edit `/etc/kubernetes/madpods.conf`
+
+```
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+maxPods: 250
+```
+
+Then edit `/var/lib/kubelet/kubeadm-flags.env`
+
+```
+KUBELET_KUBEADM_ARGS="--container-runtime-endpoint=unix:///var/run/crio/crio.sock --pod-infra-container-image=registry.k8s.io/pause:3.9 --config=/etc/kubernetes/madpods.conf"
+```
+
+Adding just the end one.
+
+```
+systemctl restart kubelet
+```
+
+And check with...
+
+```
+kubectl get node labkubedualhost-node-1 -ojsonpath='{.status.capacity.pods}'
+```
+
+And then I ran into issues with Flannel number of IPs available! lol.
+
+Initial result with 100 pods:
+
+```
+[fedora@labkubedualhost-master-1 whereabouts]$ ./timer.sh 100
+networkattachmentdefinition.k8s.cni.cncf.io/bridge-conf unchanged
+replicaset.apps/sample-replicaset created
+All replicas are in 'Running' state! Took 24 seconds.
+```
+

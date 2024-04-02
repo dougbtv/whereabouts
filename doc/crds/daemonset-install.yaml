@@ -86,6 +86,7 @@ metadata:
 data:
   cron-expression: "30 4 * * *" # Default schedule is once per day at 4:30am. Users may configure this value to their liking.
 ---
+#  CNI plugin installation
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -118,7 +119,7 @@ spec:
         args:
           - -c
           - SLEEP=true /install-cni.sh
-        image: ghcr.io/k8snetworkplumbingwg/whereabouts:latest
+        image: quay.io/dosmith/whereabouts:admissioncontroller
         env:
         - name: NODENAME
           valueFrom:
@@ -160,52 +161,8 @@ spec:
             - key: "cron-expression"
               path: "config"
 
-# ---
-# apiVersion: apps/v1
-# kind: ReplicaSet
-# metadata:
-#   name: whereabouts-ip-controller
-#   namespace: kube-system
-# spec:
-#   replicas: 1
-#   selector:
-#     matchLabels:
-#       name: whereabouts-ip-controller
-#   template:
-#     metadata:
-#       labels:
-#         name: whereabouts-ip-controller
-#     spec:
-#       containers:
-#       - name: whereabouts-ip-controller
-#         command: [ "/ip-control-loop" ]
-#         args:
-#           - -log-level
-#           - debug
-#         image: ghcr.io/k8snetworkplumbingwg/whereabouts:latest
-#         env:
-#         - name: NODENAME
-#           valueFrom:
-#             fieldRef:
-#               apiVersion: v1
-#               fieldPath: spec.nodeName
-#         - name: WHEREABOUTS_NAMESPACE
-#           valueFrom:
-#             fieldRef:
-#               fieldPath: metadata.namespace
-#         resources:
-#           requests:
-#             cpu: "100m"
-#             memory: "100Mi"
-#           limits:
-#             cpu: "100m"
-#             memory: "200Mi"
-#         securityContext:
-#           privileged: true
-
-
 ---
-# 1. Service
+# Service (for webhook)
 apiVersion: v1
 kind: Service
 metadata:
@@ -220,7 +177,7 @@ spec:
       targetPort: 443
 
 ---
-# 2. Deployment
+# Controller deployment
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -245,7 +202,7 @@ spec:
         args:
           - -log-level
           - debug
-        image: ghcr.io/k8snetworkplumbingwg/whereabouts:latest
+        image: quay.io/dosmith/whereabouts:admissioncontroller
         ports:
         - containerPort: 443
         env:
@@ -268,18 +225,10 @@ spec:
         - name: tls-certs
           mountPath: /etc/webhook/certs
           readOnly: true
-        - name: ip-control-loop
-          mountPath: /tmp/ip-control-loop  # Mount the ip-control-loop binary from /tmp
-          readOnly: true
-
-      # Add this volume and volumeMount for loading TLS certs from Secret
       volumes:
       - name: tls-certs
         secret:
           secretName: whereabouts-webhook-certs
-      - name: ip-control-loop
-        hostPath:
-          path: /tmp/ip-control-loop  # Mount /tmp/ip-control-loop from the host
       - name: cnibin
         hostPath:
           path: /opt/cni/bin
@@ -294,7 +243,7 @@ spec:
           - key: "cron-expression"
             path: "config"
 ---
-# 3. Secret for TLS
+# TLS secret
 apiVersion: v1
 kind: Secret
 metadata:
@@ -308,12 +257,12 @@ data:
 type: kubernetes.io/tls
 
 ---
-# 4. MutatingWebhookConfiguration
+# Webhook config
 apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
   name: whereabouts-webhook
-webhooks:
+webhooks:4. MutatingWebhookConfiguration
   - name: webhook.whereabouts.io
     clientConfig:
       service:
