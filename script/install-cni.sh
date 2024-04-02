@@ -104,6 +104,7 @@ EOF
   "kubernetes": {
     "kubeconfig": "${WHEREABOUTS_KUBECONFIG_LITERAL}"
   },
+  "enable_overlapping_ranges": false,
   "reconciler_cron_expression": "${WHEREABOUTS_RECONCILER_CRON}"
 }
 EOF

@@ -159,4 +159,16 @@ replicaset.apps/sample-replicaset created
 All replicas are in 'Running' state! Took 93 seconds.
 ```
 
-And 99 seconds.
+And 99 seconds on a second go.
+
+And then 350 pods with admission controller + overlappingranges disabled...
+
+```
+[fedora@bigcluster-master-1 whereabouts]$ ./hack/timer.sh 350
+networkattachmentdefinition.k8s.cni.cncf.io/bridge-conf unchanged
+replicaset.apps/sample-replicaset created
+All replicas are in 'Running' state! Took 75 seconds.
+```
+
+Shaves 25% off huh.
+
