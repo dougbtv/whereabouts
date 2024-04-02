@@ -211,6 +211,7 @@ func mutatePod(w http.ResponseWriter, r *http.Request) {
 	whereaboutsfound := true
 	networks, err := GetNetworkSelectionAnnotation(&pod)
 	if networks != nil {
+		// TODO: This will crash if there's no net-attach-def CRD. We need to handle this.
 		labellist, uuid, err = ProcessNetworkSelection(&pod, networks)
 		if err != nil {
 			if _, ok := err.(*NoK8sNetworkError); ok {
