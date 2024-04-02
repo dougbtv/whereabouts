@@ -262,7 +262,7 @@ apiVersion: admissionregistration.k8s.io/v1
 kind: MutatingWebhookConfiguration
 metadata:
   name: whereabouts-webhook
-webhooks:4. MutatingWebhookConfiguration
+webhooks:
   - name: webhook.whereabouts.io
     clientConfig:
       service:
