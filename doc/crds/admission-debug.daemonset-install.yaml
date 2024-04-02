@@ -1,0 +1,332 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: whereabouts
+  namespace: kube-system
+---
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: whereabouts
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: whereabouts-cni
+subjects:
+- kind: ServiceAccount
+  name: whereabouts
+  namespace: kube-system
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: whereabouts-cni
+rules:
+- apiGroups:
+  - whereabouts.cni.cncf.io
+  resources:
+  - ippools
+  - overlappingrangeipreservations
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - '*'
+- apiGroups: [""]
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
+  - watch
+  - patch
+  - update
+- apiGroups: [""]
+  resources:
+  - nodes
+  verbs:
+  - get
+- apiGroups: ["k8s.cni.cncf.io"]
+  resources:
+    - network-attachment-definitions
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
+    - events
+  verbs:
+  - create
+  - patch
+  - update
+  - get
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: whereabouts-config
+  namespace: kube-system
+  annotations:
+    kubernetes.io/description: |
+      Configmap containing user customizable cronjob schedule
+data:
+  cron-expression: "30 4 * * *" # Default schedule is once per day at 4:30am. Users may configure this value to their liking.
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: whereabouts-cni
+  namespace: kube-system
+  labels:
+    tier: node
+    app: whereabouts-cni
+spec:
+  selector:
+    matchLabels:
+      name: whereabouts-cni
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        tier: node
+        app: whereabouts-cni
+        name: whereabouts-cni
+    spec:
+      hostNetwork: true
+      serviceAccountName: whereabouts
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: whereabouts-cni
+        command: [ "/bin/sh" ]
+        args:
+          - -c
+          - SLEEP=true /install-cni.sh
+        image: ghcr.io/k8snetworkplumbingwg/whereabouts:latest
+        env:
+        - name: NODENAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.nodeName
+        - name: WHEREABOUTS_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "100Mi"
+          limits:
+            cpu: "100m"
+            memory: "200Mi"
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: cnibin
+          mountPath: /host/opt/cni/bin
+        - name: cni-net-dir
+          mountPath: /host/etc/cni/net.d
+        - name: cron-scheduler-configmap
+          mountPath: /cron-schedule
+      volumes:
+        - name: cnibin
+          hostPath:
+            path: /opt/cni/bin
+        - name: cni-net-dir
+          hostPath:
+            path: /etc/cni/net.d
+        - name: cron-scheduler-configmap
+          configMap:
+            name: "whereabouts-config"
+            defaultMode: 0744
+            items:
+            - key: "cron-expression"
+              path: "config"
+
+# ---
+# apiVersion: apps/v1
+# kind: ReplicaSet
+# metadata:
+#   name: whereabouts-ip-controller
+#   namespace: kube-system
+# spec:
+#   replicas: 1
+#   selector:
+#     matchLabels:
+#       name: whereabouts-ip-controller
+#   template:
+#     metadata:
+#       labels:
+#         name: whereabouts-ip-controller
+#     spec:
+#       containers:
+#       - name: whereabouts-ip-controller
+#         command: [ "/ip-control-loop" ]
+#         args:
+#           - -log-level
+#           - debug
+#         image: ghcr.io/k8snetworkplumbingwg/whereabouts:latest
+#         env:
+#         - name: NODENAME
+#           valueFrom:
+#             fieldRef:
+#               apiVersion: v1
+#               fieldPath: spec.nodeName
+#         - name: WHEREABOUTS_NAMESPACE
+#           valueFrom:
+#             fieldRef:
+#               fieldPath: metadata.namespace
+#         resources:
+#           requests:
+#             cpu: "100m"
+#             memory: "100Mi"
+#           limits:
+#             cpu: "100m"
+#             memory: "200Mi"
+#         securityContext:
+#           privileged: true
+
+
+---
+# 1. Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: whereabouts-webhook
+  namespace: kube-system
+spec:
+  selector:
+    app: whereabouts-webhook
+  ports:
+    - protocol: TCP
+      port: 443
+      targetPort: 443
+
+---
+# 2. Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whereabouts-webhook
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: whereabouts-webhook
+  template:
+    metadata:
+      labels:
+        app: whereabouts-webhook
+    spec:
+      serviceAccountName: whereabouts
+      containers:
+      - name: whereabouts-ip-controller
+        command: [ "/tmp/ip-control-loop" ]
+        securityContext:
+          privileged: true
+        args:
+          - -log-level
+          - debug
+        image: ghcr.io/k8snetworkplumbingwg/whereabouts:latest
+        ports:
+        - containerPort: 443
+        env:
+        - name: NODENAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.nodeName
+        - name: WHEREABOUTS_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        volumeMounts:
+        - name: cron-scheduler-configmap
+          mountPath: /cron-schedule
+        - name: cnibin
+          mountPath: /opt/cni/bin
+        - name: cni-net-dir
+          mountPath: /etc/cni/net.d
+        - name: tls-certs
+          mountPath: /etc/webhook/certs
+          readOnly: true
+        - name: ip-control-loop
+          mountPath: /tmp/ip-control-loop  # Mount the ip-control-loop binary from /tmp
+          readOnly: true
+
+      # Add this volume and volumeMount for loading TLS certs from Secret
+      volumes:
+      - name: tls-certs
+        secret:
+          secretName: whereabouts-webhook-certs
+      - name: ip-control-loop
+        hostPath:
+          path: /tmp/ip-control-loop  # Mount /tmp/ip-control-loop from the host
+      - name: cnibin
+        hostPath:
+          path: /opt/cni/bin
+      - name: cni-net-dir
+        hostPath:
+          path: /etc/cni/net.d
+      - name: cron-scheduler-configmap
+        configMap:
+          name: "whereabouts-config"
+          defaultMode: 0744
+          items:
+          - key: "cron-expression"
+            path: "config"
+---
+# 3. Secret for TLS
+apiVersion: v1
+kind: Secret
+metadata:
+  name: whereabouts-webhook-certs
+  namespace: kube-system
+data:
+  tls.crt: >
+    LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURFakNDQWZxZ0F3SUJBZ0lVQitBZ0Y0TFV5UE1Da2dWMENheWorQmxhQ2tJd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0hURWJNQmtHQTFVRUF3d1NiWGt0ZDJWaWFHOXZheTF6WlhKMmFXTmxNQjRYRFRJME1ETXlPVEUxTXpZeQpNMW9YRFRJMU1ETXlPVEUxTXpZeU0xb3dIVEViTUJrR0ExVUVBd3dTYlhrdGQyVmlhRzl2YXkxelpYSjJhV05sCk1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBenhJWnpEenlZV0dmV1Q2Rng2SmMKbFZzRk55ZGc2YmNkZHlGWHpaOEswQWk0c1pkWndrcEFUcVdzZVZEVm51TDUrSlVycWdiRGVYbzJQYzI1YXl4UApLeTA1dzNOWkR2a0w5WU91ODB5cE5DYXR1NHIyaXBCVW81RTlCdUhQRjI1ZndKZkFySngrZi9xNGZqYTFTY3l4CjZZcCtRS3g5RFJwWFcxbjFYYUVSak8zVlhOUXNwcFVVYXNCaGpHbmUxY0tJVGYzSDdxbmk0bmNaTC9mRm1nbkkKK0NBaFBtUlVXVXB1WDlya1FPTGZZYkM3a1hSM2ZRdERTMkttMGgrTDJBeDJmVVVPTWpwOWxNV1FpbEZjSCtOagpuZ3VVYXN3VXJ3VTRnVVV2N3RnbXFvQWhQcUwvYkwyUDMvQTdYdXhWM0kvclgvTlRhR3BmU0NQVFQvbHpVMzNGCnN3SURBUUFCbzBvd1NEQUpCZ05WSFJNRUFqQUFNQXNHQTFVZER3UUVBd0lGNERBdUJnTlZIUkVFSnpBbGdpTjMKYUdWeVpXRmliM1YwY3kxM1pXSm9iMjlyTG10MVltVXRjM2x6ZEdWdExuTjJZekFOQmdrcWhraUc5dzBCQVFzRgpBQU9DQVFFQVAvdXRtS1JMMXVKOEx3cUZZQzZ6MFRjVTE3TERFeEtPTURFb2FkV0pOR3pUbHBTWHJZc2FOTlY2CitsczhyTW5KTjFZUFdPYUUydExXZDZRMHJmS1IxeTRRNklRZy95Y0w0THk0VkwwNkdMSEYvUGsxdmF0UERhWXgKaUNxSWF2ck8zeXJSZ3RRdHZyR2hMZlQzMGpiV21HWFdvUHRkWW9zbVU1YU5Qdktpb25sV2pURFBoYjl6Zy80Uwp0MXFONXpzU1hFL29UTWtEQ092bjNRdkc4RXh2Y21lcmp4eHlCSmJKKzlwbDVYdUdJRER4SFZURlF0N3FzWUV5Cmc3SmRHMzRjTHpiL1pqS2lESnR6b1ovVXJEUEptZFlQVGh0RjRoSzh6cEZjVjVSbk5xVXNXVEFUYitIZEpsZlUKSkorNHBWbWVodkMzTmFoanlsTUxmc3FuOXBvSldnPT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+  tls.key: >
+    LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb2dJQkFBS0NBUUVBenhJWnpEenlZV0dmV1Q2Rng2SmNsVnNGTnlkZzZiY2RkeUZYelo4SzBBaTRzWmRaCndrcEFUcVdzZVZEVm51TDUrSlVycWdiRGVYbzJQYzI1YXl4UEt5MDV3M05aRHZrTDlZT3U4MHlwTkNhdHU0cjIKaXBCVW81RTlCdUhQRjI1ZndKZkFySngrZi9xNGZqYTFTY3l4NllwK1FLeDlEUnBYVzFuMVhhRVJqTzNWWE5RcwpwcFVVYXNCaGpHbmUxY0tJVGYzSDdxbmk0bmNaTC9mRm1nbkkrQ0FoUG1SVVdVcHVYOXJrUU9MZlliQzdrWFIzCmZRdERTMkttMGgrTDJBeDJmVVVPTWpwOWxNV1FpbEZjSCtOam5ndVVhc3dVcndVNGdVVXY3dGdtcW9BaFBxTC8KYkwyUDMvQTdYdXhWM0kvclgvTlRhR3BmU0NQVFQvbHpVMzNGc3dJREFRQUJBb0lCQUVBMW1xNU1UOVNHa3dUMwpjRUJoUmxoQjZ6SVpFZUluR0FueTJ1azE0Z0owVWVFdnozT0Ixc01NZUpqOXllQUUvZ0pwTHlzQUFlbFBUamFICjduRWZRa1ZmTnNRMnBtMFFLUGN1cURkbGxDcEp2Q0dsaTZHWDg4YnNxSUhUejRXeWdocVVjL2lTWmwrRS9XU1YKemsxZUhlVVBQdXNMRVpQWWtUSVFpUmRKZE1tLy8wR3NlakFBS2k2OFQ1UGp4VStBNWpNZHBlWHRoc1UxYnliWAoraFlRNER0UGVsQUE4clEzU0ZkUWx2ZHMzM3laMVRBWUVhTklIelpKZ0V6S0JHNGdraDRTUkdqSUwzVzcrQnBYCnFXL0dUS2c4d3RxMTBkMW5FYkxyMTF6N0o0bk05TWgzL1NhZ3ZlSXlYV1E4VEJwRkZzVHdTSEhOTDNRbjBWRzUKUzZWMCs0RUNnWUVBN3Fpa0NjdGFNaExBL0s4K05pZTZ6UkhkVnZITlB1TzEySVlZTmdLaldabFVLTmd2OEJTWgpibVo3clpkclBidnM1Q0wzNC95MHV4YUZpRkgzZDFsZzdLZG9oaUhURHhnTStjdFNVWUN3dEp0UW9KTW5nc2t0CnVNejNDV2pWVlIxZFRXT0RneGszOGhSYXBuWTVZd0h5T1NucDA2NGJxZjliV095NnM2a0V0ZUVDZ1lFQTNoM2gKdTZkNThYL1pVa1NhQlRQaW43Sjk1bExCdVdhdDJTL1JTZ2Q2VDBVejg4VWZCSmMwQU95SlNOb2xGVXZhMkw0YwpOZ25UcEIzZ281TFl4eXZrMmo5cng5ZlBXdlpxdy9kUEF0NTlWRUQzdTVjSk50UjRtbHd1WUhYTjlFaEdDcnlOCmNFei9lYUVuWXYzS1puMHVKY2IrQktDRFdUdDlXdWFHZGJZQkJoTUNnWUFKa2ZHaUF1bUhBSUdFb0hKYU1aV28KQzROWXJUR1J5QWZPdXZIVm1KMThSazI5cFkybWp1em9KR3ZwTmgweXlJcGpTNU90TE1FQ2o1Q2pPc1kxbnZ2bwpBWDZMZ21lNFB6cWwrYVUvWjIydWtGdlhWSTlOQzB3dUVPb0hFcEViYktZRktHeHBvV1ZBNjlnR3ZNN29UWGV0Ckd5VXBPOTRZSHdsR3M1ZDVCTm9QZ1FLQmdHdjlUVDJHSEdTTXl5VVRVMnJLSWhtUWwyTit3czhZRzlmblJyTGUKVmRucWhHcTFZUEpEYlRZeHlrRlFSZzFIbHZ3ZjJlbHY5NlRvSGNxSlg3bmVIbUw1eUxZZHQ2TzdBSWVNV3E3RAphMTJtUkl2QXorc0hmQ2RZUC9nSDduMGhFbVN2N1hnM0IxS2tSbGo3bVFjaFAybUFpUW5JM0hOcTEvUjA5ZFNQCkM0cGZBb0dBVjF4Zy9ZdTdxaGZ0U3k0RnJUekpvZHJWV0cwK3RYdStqVTJaMnpwc1JVRUtRU3pGNyt0WDJWNmoKN0k2cHNXT2F0MTlqd2E2a1ptMExaVG50bGg3VnBwRFNjZWdUNytpUXdlSkNBdEtKN0tKMnZSUFdDVHloQnlNKwpHYllqUnJ6WGhnVHYrWWJqbExjcmc4dUdDVFQ1emhtVmlpUitVQjZQQTY3RGZaZzNreWc9Ci0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0tCg==
+type: kubernetes.io/tls
+
+---
+# 4. MutatingWebhookConfiguration
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: whereabouts-webhook
+webhooks:
+  - name: webhook.whereabouts.io
+    clientConfig:
+      service:
+        name: whereabouts-webhook
+        namespace: kube-system
+        path: "/mutate"
+      caBundle: >
+        LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURFakNDQWZxZ0F3SUJBZ0lVQitBZ0Y0TFV5UE1Da2dWMENheWorQmxhQ2tJd0RRWUpLb1pJaHZjTkFRRUwKQlFBd0hURWJNQmtHQTFVRUF3d1NiWGt0ZDJWaWFHOXZheTF6WlhKMmFXTmxNQjRYRFRJME1ETXlPVEUxTXpZeQpNMW9YRFRJMU1ETXlPVEUxTXpZeU0xb3dIVEViTUJrR0ExVUVBd3dTYlhrdGQyVmlhRzl2YXkxelpYSjJhV05sCk1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBenhJWnpEenlZV0dmV1Q2Rng2SmMKbFZzRk55ZGc2YmNkZHlGWHpaOEswQWk0c1pkWndrcEFUcVdzZVZEVm51TDUrSlVycWdiRGVYbzJQYzI1YXl4UApLeTA1dzNOWkR2a0w5WU91ODB5cE5DYXR1NHIyaXBCVW81RTlCdUhQRjI1ZndKZkFySngrZi9xNGZqYTFTY3l4CjZZcCtRS3g5RFJwWFcxbjFYYUVSak8zVlhOUXNwcFVVYXNCaGpHbmUxY0tJVGYzSDdxbmk0bmNaTC9mRm1nbkkKK0NBaFBtUlVXVXB1WDlya1FPTGZZYkM3a1hSM2ZRdERTMkttMGgrTDJBeDJmVVVPTWpwOWxNV1FpbEZjSCtOagpuZ3VVYXN3VXJ3VTRnVVV2N3RnbXFvQWhQcUwvYkwyUDMvQTdYdXhWM0kvclgvTlRhR3BmU0NQVFQvbHpVMzNGCnN3SURBUUFCbzBvd1NEQUpCZ05WSFJNRUFqQUFNQXNHQTFVZER3UUVBd0lGNERBdUJnTlZIUkVFSnpBbGdpTjMKYUdWeVpXRmliM1YwY3kxM1pXSm9iMjlyTG10MVltVXRjM2x6ZEdWdExuTjJZekFOQmdrcWhraUc5dzBCQVFzRgpBQU9DQVFFQVAvdXRtS1JMMXVKOEx3cUZZQzZ6MFRjVTE3TERFeEtPTURFb2FkV0pOR3pUbHBTWHJZc2FOTlY2CitsczhyTW5KTjFZUFdPYUUydExXZDZRMHJmS1IxeTRRNklRZy95Y0w0THk0VkwwNkdMSEYvUGsxdmF0UERhWXgKaUNxSWF2ck8zeXJSZ3RRdHZyR2hMZlQzMGpiV21HWFdvUHRkWW9zbVU1YU5Qdktpb25sV2pURFBoYjl6Zy80Uwp0MXFONXpzU1hFL29UTWtEQ092bjNRdkc4RXh2Y21lcmp4eHlCSmJKKzlwbDVYdUdJRER4SFZURlF0N3FzWUV5Cmc3SmRHMzRjTHpiL1pqS2lESnR6b1ovVXJEUEptZFlQVGh0RjRoSzh6cEZjVjVSbk5xVXNXVEFUYitIZEpsZlUKSkorNHBWbWVodkMzTmFoanlsTUxmc3FuOXBvSldnPT0KLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo=
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+    admissionReviewVersions: ["v1", "v1beta1"]
+    sideEffects: None
+    timeoutSeconds: 5

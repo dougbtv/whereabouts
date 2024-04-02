@@ -1,0 +1,77 @@
+# Hacking on the admission controller
+
+I've been using a kubernetes cluster with a single worker. So everything happens on one host for convenience of devleopsment.
+
+Run `./hack/build-go.sh` as usual.
+
+Then, I have a way to scp the binaries onto the single worker host:
+
+```
+./hack/admission_controller/scp-build.sh
+```
+
+NOTE: The admission controller can't be running with the mount, otherwise you'll get a write failed due to the file being open on scp.
+
+Tailor to your environment, and the following paths.
+
+## Webhook
+
+The webhook is created in the `/tmp`` directory and then I have `doc/crds/admission-debug.daemonset-install.yaml` which has a way to mount the binary from a temp file.
+
+Create whereabouts given that.
+
+Now... watch the pods until they come up.
+
+And you can get the logs with:
+
+```
+kubectl get pods -n kube-system | awk '{print $1}' | grep -i webhook | xargs -I {} kubectl logs {} -n kube-system -f
+```
+
+You can then clean it all up with:
+
+```
+#!/bin/bash
+kubectl delete -f doc/crds/daemonset-install.yaml
+kubectl delete ippools.whereabouts.cni.cncf.io 10.10.0.0-16 -n kube-system
+kubectl get overlappingrangeipreservations.whereabouts.cni.cncf.io -n kube-system | awk '{print $1}' | grep -v NAME | xargs -L1 -I{} kubectl delete overlappingrangeipreservations.whereabouts.cni.cncf.io {} -n kube-system
+kubectl get pods -A | grep -i replicaset | awk '{print $2}' | xargs -L1 -I{} kubectl delete pod {} --grace-period=0 --force
+```
+
+
+
+
+
+
+## CNI binaries
+
+Then, on that host, I have a few things I do in `/etc/cni/net.d/whereabouts.d`
+
+First I create a debug config, `debug.whereabouts.conf`
+
+```
+{
+  "datastore": "kubernetes",
+  "kubernetes": {
+    "kubeconfig": "/etc/cni/net.d/whereabouts.d/whereabouts.kubeconfig"
+  },
+  "log_level": "debug",
+  "log_file": "/tmp/whereabouts.log",
+  "reconciler_cron_expression": "30 4 * * *"
+}
+```
+
+Then I have a `devsetup.sh`
+
+```
+#!/bin/bash
+
+cp debug.whereabouts.conf whereabouts.conf
+cp /home/fedora/whereabouts2 /opt/cni/bin/whereabouts
+> /tmp/whereabouts.log
+tail -f /tmp/whereabouts.log
+```
+
+Be sure to copy the modified cni binary because it's critical.
+
+
