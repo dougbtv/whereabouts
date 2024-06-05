@@ -172,3 +172,13 @@ All replicas are in 'Running' state! Took 75 seconds.
 
 Shaves 25% off huh.
 
+And then I tried going super high @ 1mil QPS/burst...
+
+```
+[fedora@bigcluster-master-1 whereabouts]$ ./hack/timer.sh 350
+networkattachmentdefinition.k8s.cni.cncf.io/bridge-conf unchanged
+replicaset.apps/sample-replicaset created
+All replicas are in 'Running' state! Took 86 seconds.
+```
+
+Not particularly faster, actually.
